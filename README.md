@@ -1,15 +1,16 @@
-# Resume Builder - Job URL to Resume Optimizer
+# Resume Builder - Resume + Job Tracker
 
-A web application that helps you optimize your resume based on job descriptions. It scrapes job postings, analyzes them, and uses GitHub Copilot to suggest improvements to your resume.
+A web application for managing resumes and job applications in one place. It tracks jobs, stores resumes, generates Copilot-powered recommendations, supports LaTeX editing and PDF preview, and can create tailored resume drafts from a job recommendation flow.
 
 ## Features
 
-✅ **Job Scraping** - Extract job descriptions from LinkedIn, Indeed, Glassdoor, GitHub Jobs, and other job boards
-✅ **Resume Parsing** - Upload and parse PDF and DOCX resume files
-✅ **AI-Powered Suggestions** - Get resume improvement suggestions using GitHub Copilot
-✅ **Cover Letter Generator** - Automatically generate cover letters tailored to the job
-✅ **Multi-Format Export** - Download optimized resume in PDF or DOCX format
-✅ **Web-Based Interface** - Clean, intuitive UI with step-by-step workflow
+✅ **Job Tracking** - Store job details, status, notes, resume linkage, and Copilot summary data
+✅ **Resume Management** - Upload PDF, DOCX, TXT, and LaTeX resume files
+✅ **LaTeX Resume Editor** - Edit .tex resumes directly, format source, adjust editor font size, and compile to PDF
+✅ **Copilot Suggestions** - Generate resume recommendations, summaries, and cover letters with GitHub Copilot
+✅ **Recommendation-to-Resume Flow** - Apply recommendations to create a new tailored resume and open it in Resumes
+✅ **Multi-Format Export** - Export resumes to PDF or DOCX and keep generated files in the Job Applications view
+✅ **Web-Based Interface** - Three-pane UI with persistent layout controls and job/resume navigation
 
 ## Prerequisites
 
@@ -56,29 +57,36 @@ cd app
 python main.py
 ```
 
+Or with Uvicorn:
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
 2. **Open in browser:**
 Navigate to `http://localhost:8000`
 
 ## How to Use
 
 ### Step 1: Add Job Posting
-- Paste the job URL (LinkedIn, Indeed, Glassdoor, etc.)
-- Click "Scrape Job Details"
-- Review the extracted job title, company, and description
+- Paste the job URL or add a job description
+- Click the job scrape/fill actions to populate the job record
+- Review the extracted job title, company, description, and summary
 
 ### Step 2: Upload Your Resume
-- Select your resume file (PDF or DOCX)
+- Select your resume file (PDF, DOCX, TXT, or LaTeX)
 - Click "Upload Resume"
 - Preview the extracted text
 
 ### Step 3: Review Suggestions
-- Click "Get Resume Suggestions" to get AI-powered improvements
+- Click "Get Recommendation" to generate ATS-friendly improvements
+- Click "Update the Resume with this Recommendation" to create a new tailored resume
 - Click "Generate Cover Letter" to create a tailored cover letter
-- Review and copy the suggestions
+- Use the Copilot Prompt tab for prompt history and reusable context
 
-### Step 4: Export Resume
-- Enter a filename for your optimized resume
-- Download in PDF or DOCX format
+### Step 4: Edit and Export Resume
+- Use the LaTeX editor when a .tex resume is selected
+- Adjust editor font size, format the source, and compile to PDF
+- Export the optimized resume in PDF or DOCX format
 
 ## Project Structure
 
@@ -86,40 +94,53 @@ Navigate to `http://localhost:8000`
 resume_builder/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                  # FastAPI application
+│   ├── main.py                  # FastAPI application and API routes
+│   ├── storage.py               # JSON persistence helpers
+│   ├── resume_manager.py        # Resume CRUD, versioning, ATS updates
+│   ├── tailoring.py             # Copilot-based tailoring and cover letters
 │   ├── copilot_integration.py   # GitHub Copilot CLI wrapper
 │   ├── job_scraper.py           # Job posting scraper
-│   ├── resume_parser.py         # Resume parsing & export
+│   ├── job_tracker.py           # Job CRUD and pipeline helpers
+│   ├── resume_parser.py         # Resume parsing, LaTeX extraction, export
 │   └── static/
 │       ├── index.html           # Frontend UI
 │       ├── style.css            # Styling
 │       └── script.js            # Frontend logic
-├── uploads/                      # Uploaded files storage
-└── requirements.txt              # Python dependencies
+├── data/                        # JSON data store for jobs, resumes, files
+├── uploads/                     # Uploaded and generated files
+└── requirements.txt             # Python dependencies
 ```
 
 ## API Endpoints
 
-- `GET /` - Serve main page
-- `POST /api/scrape-job` - Scrape job description from URL
-- `POST /api/upload-resume` - Upload and parse resume
-- `POST /api/get-suggestions` - Get resume improvement suggestions
-- `POST /api/generate-cover-letter` - Generate cover letter
-- `POST /api/export-resume` - Export resume as PDF/DOCX
-- `GET /api/health` - Health check
+- `GET /` - Serve the main app UI
+- `GET /api/resumes` - List resumes
+- `POST /api/resumes/upload` - Upload and parse a resume
+- `PATCH /api/resumes/{resume_id}/text` - Save edited resume text
+- `POST /api/resumes/{resume_id}/compile-pdf` - Compile LaTeX resume to PDF
+- `GET /api/jobs` - List jobs
+- `POST /api/jobs/{job_id}/recommendations` - Generate resume recommendations
+- `POST /api/jobs/{job_id}/recommendations/apply` - Create a tailored resume from recommendations
+- `POST /api/cover-letter` - Generate a tailored cover letter
+- `GET /api/application-files` - List generated files
 
 ## Troubleshooting
 
 ### "GitHub Copilot CLI is not available"
 - Ensure `gh` CLI is installed: `which gh`
-- Ensure Copilot extension is installed: `gh extension list`
+- Ensure the Copilot extension is installed and authenticated
 - Authenticate with GitHub: `gh auth login`
-- Test: `gh copilot suggest "test"`
+- Test Copilot CLI access with a simple prompt
 
 ### Resume not parsing correctly
 - Ensure file is valid PDF or DOCX
 - Try re-exporting the file from your document editor
 - Check file permissions
+
+### LaTeX compile fails
+- Make sure the selected resume is a `.tex` file
+- Use the compile button in the LaTeX editor
+- Review the compiler error output and install any missing packages it lists
 
 ### Job scraping fails
 - Verify the URL is correct and publicly accessible
@@ -131,8 +152,7 @@ resume_builder/
 - LinkedIn Jobs
 - Indeed
 - Glassdoor
-- GitHub Jobs
-- Generic job boards (with basic HTML parsing)
+- Generic HTML job pages
 
 ## Dependencies
 
@@ -143,13 +163,16 @@ resume_builder/
 - **reportlab** - PDF generation
 - **requests** - HTTP requests
 - **beautifulsoup4** - HTML parsing
+- **Uvicorn** - Local ASGI server
+- **GitHub Copilot CLI** - AI generation and tailoring
 
 ## Notes
 
 - The application stores uploaded files in the `uploads/` directory
 - Job descriptions are scraped in real-time from the provided URLs
-- GitHub Copilot suggestions require an active API connection
-- This is a client-side optimized tool - all processing happens locally
+- LaTeX resumes keep both the original and updated source files
+- The Job Tracker and Resumes views are linked through `resume_id`
+- Copilot prompt history is stored locally in the browser
 
 ## License
 

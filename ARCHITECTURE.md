@@ -10,33 +10,34 @@
                           │
                           ▼
            ┌──────────────────────────────┐
-           │  Frontend (HTML/CSS/JS)      │
-           │  - Step-by-step wizard       │
-           │  - Form handling             │
-           │  - File upload               │
+                     │  Frontend (HTML/CSS/JS)      │
+                     │  - Three-pane dashboard      │
+                     │  - Job tracker               │
+                     │  - Resume editor + preview   │
+                     │  - Copilot prompt history    │
            └──────────┬───────────────────┘
                       │ HTTP Requests
                       ▼
          ┌────────────────────────────┐
-         │   FastAPI Server (main.py) │
-         │   - REST API endpoints     │
-         │   - Request routing        │
-         │   - Response handling      │
+                 │   FastAPI Server (main.py) │
+                 │   - REST API endpoints     │
+                 │   - Request routing        │
+                 │   - Copilot orchestration   │
          └────────┬───────────┬───┬───┘
                   │           │   │
     ┌─────────────▼──┐  ┌──────▼──┐  ┌──────────┬──────────────┐
     │ Job Scraper    │  │Resume   │  │ Copilot  │ File Storage │
     │                │  │Parser   │  │          │              │
-    │ - URL fetch    │  │         │  │- gh CLI  │ - Uploads/   │
-    │ - HTML parse   │  │- PDF    │  │- Process │ - Temp files │
-    │ - Job extract  │  │- DOCX   │  │- Suggest │              │
-    │                │  │- Export │  │          │              │
+    │ - URL fetch    │  │         │  │- gh CLI  │ - uploads/   │
+    │ - HTML parse   │  │- PDF    │  │- Prompt  │ - data/      │
+    │ - Job extract  │  │- DOCX   │  │- Tailor  │ - generated  │
+    │                │  │- LaTeX  │  │- Cover   │              │
     └────────────────┘  └─────────┘  └──────────┴──────────────┘
                             │
                             ▼
         ┌─────────────────────────────────┐
         │   Local File System             │
-        │   - PDF/DOCX files              │
+        │   - PDF/DOCX/TXT/LaTeX files    │
         │   - Uploaded resumes            │
         │   - Generated files             │
         └─────────────────────────────────┘
@@ -46,12 +47,15 @@
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/api/scrape-job` | Extract job details from URL |
-| POST | `/api/upload-resume` | Parse uploaded resume (PDF/DOCX) |
-| POST | `/api/get-suggestions` | Get resume improvement suggestions |
-| POST | `/api/generate-cover-letter` | Create tailored cover letter |
-| POST | `/api/export-resume` | Download resume as PDF or DOCX |
-| GET | `/api/health` | Check server status |
+| GET | `/api/resumes` | List resumes |
+| POST | `/api/resumes/upload` | Parse uploaded resume (PDF/DOCX/TXT/LaTeX) |
+| PATCH | `/api/resumes/{resume_id}/text` | Save edited resume text |
+| POST | `/api/resumes/{resume_id}/compile-pdf` | Compile LaTeX resume to PDF |
+| GET | `/api/jobs` | List jobs |
+| POST | `/api/jobs/{job_id}/recommendations` | Generate resume recommendations |
+| POST | `/api/jobs/{job_id}/recommendations/apply` | Create a tailored resume from recommendations |
+| POST | `/api/cover-letter` | Generate a tailored cover letter |
+| GET | `/api/application-files` | List generated artifacts |
 
 ## Data Flow
 
@@ -59,20 +63,26 @@
 1. USER ENTERS JOB URL
    └─→ Job Scraper fetches HTML
        └─→ BeautifulSoup parses job details
-           └─→ Frontend displays title, company, description
+           └─→ Frontend displays title, company, description, and summary
 
 2. USER UPLOADS RESUME
    └─→ File saved to uploads/
-       └─→ Resume Parser extracts text
-           └─→ Frontend shows preview
+       └─→ Resume Parser extracts text or LaTeX source
+           └─→ Frontend shows preview and LaTeX editor when applicable
 
-3. USER REQUESTS SUGGESTIONS
-   └─→ Both texts sent to Copilot Integration
+3. USER REQUESTS RECOMMENDATIONS
+   └─→ Job summary + resume text sent to Copilot Integration
        └─→ gh copilot CLI called
-           └─→ AI suggestions returned
-               └─→ Displayed in browser
+           └─→ ATS-friendly recommendations returned
+               └─→ Stored on the job and displayed in the browser
 
-4. USER EXPORTS RESUME
+4. USER APPLIES RECOMMENDATIONS
+   └─→ Recommendation text sent with the source resume
+       └─→ Copilot rewrites the resume draft
+           └─→ New resume record created
+               └─→ Resumes tab opens the new tailored resume
+
+5. USER EXPORTS OR COMPILES RESUME
    └─→ Text converted to PDF or DOCX
        └─→ File saved temporarily
            └─→ Downloaded to user's device
@@ -90,6 +100,10 @@
 - **Uvicorn** - ASGI web server
 - **Pydantic** - Data validation
 
+### State and Storage
+- **JSON files** - Persist jobs, resumes, and generated artifacts
+- **LocalStorage** - Save UI preferences and Copilot prompt history
+
 ### Libraries
 - **python-docx** - Create/read .docx files
 - **pdfplumber** - Extract text from PDFs
@@ -97,6 +111,7 @@
 - **reportlab** - Generate PDF files
 - **requests** - HTTP client
 - **beautifulsoup4** - HTML/XML parsing
+- **copilot CLI** - Resume recommendations and tailoring
 
 ### External Services
 - **GitHub Copilot CLI** - AI suggestions (via `copilot -p` command)
@@ -104,15 +119,18 @@
 ## File Roles
 
 ### Core Application
-- `main.py` - FastAPI app, all 7 endpoints
+- `main.py` - FastAPI app, API endpoints, and Copilot flows
+- `storage.py` - JSON persistence layer
+- `resume_manager.py` - Resume CRUD, versioning, ATS updates
+- `tailoring.py` - Resume tailoring and cover letter helpers
 - `copilot_integration.py` - Wraps `gh copilot suggest` command
 - `job_scraper.py` - Multi-board job scraping with fallback parser
-- `resume_parser.py` - PDF/DOCX read and write operations
+- `resume_parser.py` - PDF/DOCX/LaTeX read and write operations
 
 ### HTML Interface
-- `index.html` - 4-step form wizard
+- `index.html` - Three-pane dashboard UI
 - `script.js` - Event handlers, API calls, state management
-- `style.css` - Responsive design with gradient theme
+- `style.css` - Responsive dashboard styling
 
 ### Configuration
 - `requirements.txt` - Pinned dependency versions
@@ -128,6 +146,9 @@
 - Input sanitization through BeautifulSoup
 - CORS headers for API
 - Error handling with proper HTTP status codes
+- Resume/job records stored locally in JSON
+- LaTeX compile flow with error reporting and package hints
+- Recommendation-to-new-resume workflow
 
 ⚠️ **For Production**
 - Add authentication (OAuth2/JWT)
@@ -141,8 +162,8 @@
 ## Performance Notes
 
 ### Optimizations Applied
-- Async file uploads with aiofiles
-- Streaming responses for downloads
+- Local file persistence with small JSON records
+- Optional PDF preview embedding for LaTeX resumes
 - Background task support (for future use)
 - Minimal static file sizes
 
@@ -159,7 +180,6 @@
 - LinkedIn Jobs (LinkedIn-specific CSS selectors)
 - Indeed (Indeed-specific CSS selectors)
 - Glassdoor (Glassdoor-specific CSS selectors)
-- GitHub Jobs (GitHub-specific CSS selectors)
 
 **Generic Fallback:**
 - Any HTML-based job board (extracts main content)
