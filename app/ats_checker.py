@@ -200,6 +200,7 @@ def _check_sections(resume_text: str) -> tuple:
             "type": "section",
             "severity": "high",
             "message": f"Missing critical section: '{s.title()}'",
+            "detail": f"ATS systems look for a dedicated '{s.title()}' area to extract your data. Without it, your information may be indexed incorrectly."
         })
 
     score = min(100, int((len(found) / max(len(EXPECTED_SECTIONS), 1)) * 100) + 30)
@@ -213,14 +214,25 @@ def _check_formatting(resume_text: str) -> tuple:
     lines = resume_text.splitlines()
     blank_lines = sum(1 for l in lines if not l.strip())
     if blank_lines > len(lines) * 0.4:
-        issues.append({"type": "formatting", "severity": "low", "message": "Excessive blank lines may confuse ATS parsers."})
+        issues.append({
+            "type": "formatting", 
+            "severity": "low", 
+            "message": "Excessive blank lines may confuse ATS parsers.",
+            "detail": f"Resume has {blank_lines} blank lines ({int(blank_lines/len(lines)*100)}% of the file). Aim for a cleaner vertical rhythm."
+        })
         score -= 10
 
     # Check for long unbroken blocks (paragraphs over 150 words)
     paragraphs = [p.strip() for p in re.split(r'\n{2,}', resume_text) if p.strip()]
     for para in paragraphs:
         if len(para.split()) > 150:
-            issues.append({"type": "formatting", "severity": "medium", "message": "Long paragraphs detected — break into bullets for ATS readability."})
+            excerpt = para[:100] + "..."
+            issues.append({
+                "type": "formatting", 
+                "severity": "medium", 
+                "message": "Long paragraphs detected — break into bullets for ATS readability.",
+                "detail": f"Snippet: \"{excerpt}\"\n\nATS parsers and recruiters prefer concise bullet points over blocks of text exceeding 150 words."
+            })
             score -= 15
             break
 

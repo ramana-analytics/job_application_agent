@@ -3,28 +3,54 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Resume & Job Tracker</title>
-  <link rel="stylesheet" href="/static/style.css?v=2">
+  <title>Job Application Agent — AI-Powered by GitHub Copilot</title>
+  <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
-  <!-- ═══ TOP NAV ═══════════════════════════════════════════════════════ -->
-  <header class="topbar">
-    <div class="topbar-left">
-      <span class="logo">⚡ ResumeOps</span>
-      <nav class="tab-nav">
-        <button class="tab-btn active" data-tab="resumes">Resumes</button>
-        <button class="tab-btn" data-tab="jobs">Job Tracker</button>
-        <button class="tab-btn" data-tab="applications">Job Applications</button>
-        <button class="tab-btn" data-tab="copilot-logs">🤖 Copilot Prompt</button>
-      </nav>
+  <div class="app-frame">
+  <!-- ═══ TITLEBAR ════════════════════════════════════════════════════ -->
+  <header class="titlebar">
+    <div class="titlebar-left">
+      <span class="logo">🧑‍💻 Job Application Agent<span class="logo-powered">powered by GitHub Copilot</span></span>
     </div>
-    <div class="topbar-right">
+    <div class="titlebar-right">
+      <span id="titlebarUsername" class="titlebar-user" style="display:none"></span>
+      <button class="icon-btn btn-logout" id="btnLogout" title="Sign out" style="display:none">⎋ Sign out</button>
       <span id="statusBadge" class="status-badge">●  Ready</span>
       <button class="icon-btn" id="themeToggle" title="Toggle theme">☀</button>
     </div>
   </header>
 
-  <!-- ═══ MAIN LAYOUT ══════════════════════════════════════════════════ -->
+  <!-- ═══ APP LAYOUT: SIDEBAR + CONTENT ═══════════════════════════════ -->
+  <div class="app-layout">
+    <!-- ═══ SIDEBAR NAV ═══════════════════════════════════════════════ -->
+    <nav class="sidebar" id="appSidebar">
+      <div class="nav-section">
+        <button class="tab-btn nav-item active" data-tab="resumes">
+          <span class="nav-icon">📄</span><span class="nav-label">Resumes</span>
+        </button>
+        <button class="tab-btn nav-item" data-tab="latex">
+          <span class="nav-icon">⌨️</span><span class="nav-label">LaTeX Editor</span>
+        </button>
+        <button class="tab-btn nav-item" data-tab="jobs">
+          <span class="nav-icon">🤖</span><span class="nav-label">Agentic Tracker</span>
+        </button>
+        <button class="tab-btn nav-item" data-tab="applications">
+          <span class="nav-icon">📋</span><span class="nav-label">Applications</span>
+        </button>
+        <button class="tab-btn nav-item" data-tab="copilot-logs">
+          <span class="nav-icon">✨</span><span class="nav-label">GenAI Agent</span>
+        </button>
+      </div>
+      <div class="sidebar-footer">
+        <div class="sidebar-ai-info">
+          <span class="ai-pill" style="font-size:9px;padding:2px 8px">GitHub Copilot</span>
+        </div>
+        <button class="btn-sidebar-collapse" id="btnCollapseSidebar" title="Collapse sidebar">‹</button>
+      </div>
+    </nav>
+
+  <!-- ═══ MAIN CONTENT ════════════════════════════════════════════════ -->
   <main class="app-body">
     <section id="tab-resumes" class="tab-content active three-pane">
       <aside class="panel panel-list" id="resumeListPanel">
@@ -52,17 +78,7 @@
             <span id="resumeTags" class="tag-row"></span>
           </div>
           <div class="action-row">
-            <button class="btn btn-sm" id="btnSaveText">💾 Save</button>
-            <div class="latex-editor-controls" id="latexEditorControls" style="display:none">
-              <button class="btn btn-sm btn-ghost" id="btnLatexFontDecrease" title="Decrease LaTeX editor font size">A-</button>
-              <span class="latex-font-indicator" id="latexFontSizeLabel">12.5px</span>
-              <button class="btn btn-sm btn-ghost" id="btnLatexFontIncrease" title="Increase LaTeX editor font size">A+</button>
-              <button class="btn btn-sm" id="btnFormatLatex" title="Format LaTeX source">Format LaTeX</button>
-            </div>
-            <button class="btn btn-sm btn-accent" id="btnCompileLatexPdf" style="display:none">Compile and View PDF</button>
-            <button class="btn btn-sm btn-ghost" id="btnToggleLatexPdf" style="display:none">Hide PDF</button>
-            <button class="btn btn-sm btn-ghost" id="btnDownloadOriginalResume" style="display:none">Original LaTeX</button>
-            <button class="btn btn-sm btn-ghost" id="btnDownloadUpdatedResume" style="display:none">Updated LaTeX</button>
+            <button class="btn btn-sm btn-accent" id="btnOpenLatexTab" style="display:none" title="Open this file in the LaTeX Editor tab">📝 LaTeX Editor</button>
             <div class="dropdown">
               <button class="btn btn-sm" id="btnExportDrop">⬇ Export ▾</button>
               <div class="dropdown-menu" id="exportMenu">
@@ -74,24 +90,27 @@
             <button class="btn btn-sm btn-danger" id="btnDeleteResume">🗑</button>
           </div>
         </div>
-        <div class="editor-area" id="resumeEditorWrap">
+        <div class="editor-area" id="resumeEditorWrap" style="position:relative;">
           <div class="empty-state" id="resumeEmptyState">
             <div class="empty-icon">📄</div>
             <p>Select or upload a resume to get started</p>
           </div>
-          <textarea id="resumeTextarea" class="resume-textarea" spellcheck="false" style="display:none"></textarea>
-          <pre id="latexPreview" class="latex-preview" style="display:none"></pre>
-          <div id="latexDivider" class="latex-divider" style="display:none" title="Drag to resize"></div>
-          <iframe id="latexPdfFrame" class="latex-pdf-frame" style="display:none" title="LaTeX PDF Preview"></iframe>
+          <div id="resumeTextPreviewWrap" style="display:none; height:100%; overflow:auto; padding:16px 20px; box-sizing:border-box;">
+            <pre id="resumeTextPreview" class="resume-text-preview"></pre>
+          </div>
         </div>
         <div class="ats-bar" id="atsBar" style="display:none">
           <span class="ats-label">ATS Score</span>
           <div class="ats-track"><div class="ats-fill" id="atsFill"></div></div>
           <span class="ats-score" id="atsScore">—</span>
           <button class="btn btn-xs" id="btnCheckAts">Check ATS</button>
+          <select id="atsLlmModel" class="sel ats-llm-model-sel" title="Model for LLM ATS analysis" style="margin-left:6px">
+            <option value="">Auto</option>
+          </select>
+          <button class="btn btn-xs btn-outline" id="btnCheckAtsLlm" style="margin-left:2px" title="LLM-powered deep ATS analysis via Copilot">✶ LLM ATS</button>
+          <button class="btn btn-xs btn-outline" id="btnShowAtsProof" style="display:none;margin-left:4px">Show Proof</button>
         </div>
       </div>
-
       <div class="pane-divider" id="resumesPaneDivider" title="Drag to resize right pane"></div>
 
       <aside class="panel panel-right" id="resumeRightPanel">
@@ -107,10 +126,55 @@
       </aside>
     </section>
 
+    <section id="tab-latex" class="tab-content">
+      <div class="panel panel-fill" id="latexEditorPanel">
+        <div class="panel-header" id="latexTabHeader">
+          <div class="resume-title-row">
+            <span id="latexTabFilename" class="panel-title" style="color:var(--text2)">No resume selected</span>
+          </div>
+          <div class="action-row" id="latexTabActions" style="display:none">
+            <button class="btn btn-sm" id="btnSaveText">💾 Save</button>
+            <div class="latex-editor-controls" id="latexEditorControls" style="display:none">
+              <button class="btn btn-sm btn-ghost" id="btnLatexFontDecrease" title="Decrease LaTeX editor font size">A-</button>
+              <span class="latex-font-indicator" id="latexFontSizeLabel">12.5px</span>
+              <button class="btn btn-sm btn-ghost" id="btnLatexFontIncrease" title="Increase LaTeX editor font size">A+</button>
+              <button class="btn btn-sm" id="btnFormatLatex" title="Format LaTeX source">Format LaTeX</button>
+            </div>
+            <button class="btn btn-sm btn-accent" id="btnCompileLatexPdf" style="display:none">Compile and View PDF</button>
+            <button class="btn btn-sm btn-ghost" id="btnToggleLatexPdf" style="display:none">Hide PDF</button>
+            <button class="btn btn-sm btn-ghost" id="btnDownloadOriginalResume" style="display:none">Original LaTeX</button>
+            <button class="btn btn-sm btn-ghost" id="btnDownloadUpdatedResume" style="display:none">Updated LaTeX</button>
+          </div>
+        </div>
+        <div class="editor-area" id="latexEditorWrap" style="position:relative; flex:1; min-height:0;">
+          <div class="empty-state" id="latexEditorEmptyState">
+            <div class="empty-icon">📝</div>
+            <p>Select a resume in the <strong>Resumes</strong> tab</p>
+            <p style="font-size:11px;color:var(--text2);margin-top:4px">LaTeX (.tex) files open here automatically</p>
+          </div>
+          <div id="resumeEditorContainer" style="display:none; position:relative; height:100%;">
+            <div id="latexLineNumbers" class="latex-line-gutter" style="height:100%;"></div>
+            <textarea id="resumeTextarea" class="resume-textarea" spellcheck="false" style="height:100%;"></textarea>
+          </div>
+          <pre id="latexPreview" class="latex-preview" style="display:none"></pre>
+          <div id="latexDivider" class="latex-divider" style="display:none" title="Drag to resize"></div>
+          <iframe id="latexPdfFrame" class="latex-pdf-frame" style="display:none" title="LaTeX PDF Preview"></iframe>
+        </div>
+        <div class="output-toggle" id="outputToggle">
+          <button class="btn btn-sm" id="toggleOutputButton">Toggle Output</button>
+        </div>
+        <div class="output-area" id="outputArea" style="display:block;"></div>
+        <div class="latex-errors-panel" id="latexErrorsPanel" style="display:none">
+          <div class="latex-errors-header">Errors</div>
+          <div class="latex-errors-list" id="latexErrorsList"></div>
+        </div>
+      </div>
+    </section>
+
     <section id="tab-jobs" class="tab-content three-pane">
       <aside class="panel panel-list" id="jobListPanel">
         <div class="panel-header">
-          <span>Jobs</span>
+          <span>Jobs <span class="agentic-label">Agentic</span></span>
           <button class="btn btn-sm" id="btnAddJob">＋ Add Job</button>
         </div>
         <div class="filter-row">
@@ -137,7 +201,7 @@
               <span id="jobDetailCompany" class="subtle"></span>
             </div>
             <div class="action-row">
-              <button class="btn btn-xs btn-accent" id="btnCopilotFillJob">🤖 Fill with Copilot</button>
+              <button class="btn btn-xs btn-ai" id="btnCopilotFillJob">🤖 Fill with GenAI Agent</button>
               <select id="jobStatusSelect" class="sel sel-status">
                 <option value="saved">Saved</option>
                 <option value="applied">Applied</option>
@@ -152,15 +216,25 @@
           </div>
 
           <div class="meta-grid">
-            <div class="meta-item"><span class="meta-label">Location</span><span id="jLocation"></span></div>
-            <div class="meta-item"><span class="meta-label">Type</span><span id="jType"></span></div>
+            <div class="meta-item"><span class="meta-label">Location</span><input id="jLocation" class="meta-input" type="text" placeholder="e.g. New York City"></div>
+            <div class="meta-item"><span class="meta-label">Type</span><select id="jType" class="meta-input">
+              <option value="">—</option>
+              <option value="fulltime">Full-time</option>
+              <option value="parttime">Part-time</option>
+              <option value="contract">Contract</option>
+              <option value="internship">Internship</option>
+              <option value="freelance">Freelance</option>
+            </select></div>
             <div class="meta-item"><span class="meta-label">Sponsorship</span><span id="jSponsorship"></span></div>
-            <div class="meta-item"><span class="meta-label">Salary</span><span id="jSalary"></span></div>
-            <div class="meta-item"><span class="meta-label">Band</span><span id="jBand"></span></div>
-            <div class="meta-item"><span class="meta-label">Experience</span><span id="jExp"></span></div>
+            <div class="meta-item"><span class="meta-label">Salary</span><input id="jSalary" class="meta-input" type="text" placeholder="e.g. $120k–$150k"></div>
+            <div class="meta-item"><span class="meta-label">Band</span><input id="jBand" class="meta-input" type="text" placeholder="e.g. Senior"></div>
+            <div class="meta-item"><span class="meta-label">Experience</span><input id="jExp" class="meta-input" type="text" placeholder="e.g. 5+ years"></div>
             <div class="meta-item"><span class="meta-label">Applied</span><span id="jApplied"></span></div>
-            <div class="meta-item"><span class="meta-label">Deadline</span><span id="jDeadline"></span></div>
+            <div class="meta-item"><span class="meta-label">Deadline</span><input id="jDeadline" class="meta-input" type="date"></div>
             <div class="meta-item"><span class="meta-label">URL</span><span id="jUrl"></span></div>
+          </div>
+          <div class="action-row" style="margin-top:6px">
+            <button class="btn btn-xs" id="btnSaveJobMeta">💾 Save Fields</button>
           </div>
 
           <div class="section-block">
@@ -183,19 +257,19 @@
           </div>
           <div class="sub-content">
             <div class="sub-block active" id="jSummary">
-              <div class="summary-placeholder" id="jSummaryPlaceholder"><span style="color:var(--text2);font-size:12px">Click <strong>🤖 Fill with Copilot</strong> to generate an AI summary of this job.</span></div>
+              <div class="summary-placeholder" id="jSummaryPlaceholder"><span style="color:var(--text2);font-size:12px">Click <strong>🤖 Fill with GenAI Agent</strong> to let GitHub Copilot intelligently extract &amp; summarize this job.</span></div>
               <pre class="desc-pre" id="jSummaryText" style="display:none"></pre>
             </div>
             <div class="sub-block" id="jRecommendations">
-              <div class="block-title">Resume Recommendations</div>
-              <p style="font-size:11px;color:var(--text2);margin-bottom:6px">Copilot will suggest what to change in your resume for this role based on the job summary and the selected resume.</p>
+              <div class="block-title">Resume Recommendations <span class="ai-tag purple">GenAI</span></div>
+              <p style="font-size:11px;color:var(--text2);margin-bottom:6px">GitHub Copilot Agent will analyze the job and your resume, then suggest targeted improvements to maximize ATS match.</p>
               <button class="btn btn-sm btn-accent" id="btnGenerateRecommendations">Get Recommendation</button>
               <button class="btn btn-sm btn-ghost link-button" id="btnApplyRecommendations" style="display:none">Update the Resume with this Recommendation</button>
               <textarea id="jRecommendationsArea" class="mini-textarea mt-sm" rows="10" placeholder="Recommendations will appear here..."></textarea>
             </div>
             <div class="sub-block" id="jCoverLetter">
-              <div class="block-title">Cover Letter</div>
-              <p style="font-size:11px;color:var(--text2);margin-bottom:6px">Generate a cover letter from the selected resume and job summary. You can edit it before saving.</p>
+              <div class="block-title">Cover Letter <span class="ai-tag">AI Generated</span></div>
+              <p style="font-size:11px;color:var(--text2);margin-bottom:6px">GitHub Copilot generates a tailored cover letter from your resume and the job details. Edit before saving.</p>
               <div class="action-row mb-sm">
                 <button class="btn btn-sm btn-accent" id="btnGenerateCoverLetter">Generate</button>
                 <button class="btn btn-sm" id="btnSaveCoverLetter">Save Cover Letter</button>
@@ -203,7 +277,7 @@
               <textarea id="jobCoverLetterArea" class="mini-textarea" rows="14" placeholder="Cover letter will appear here..."></textarea>
             </div>
             <div class="sub-block" id="jMyInfo">
-              <p style="font-size:11px;color:var(--text2);margin-bottom:6px">All important job information is saved here. Add anything you know about the role, recruiter feedback, requirements, and context. Copilot will use this when filling fields.</p>
+              <p style="font-size:11px;color:var(--text2);margin-bottom:6px">All important job context is saved here. Add recruiter notes, requirements, and insights — the <strong style="color:var(--accent)">GenAI Agent</strong> uses this to give better, more targeted results.</p>
               <textarea id="jMyInfoArea" class="mini-textarea" rows="14" placeholder="e.g. Spoken to recruiter — role is for a new AI team. Needs AWS + Python. Budget confirmed at $180k. Remote-first."></textarea>
               <button class="btn btn-sm mt-sm" id="btnSaveMyInfo">Save My Info</button>
             </div>
@@ -240,7 +314,7 @@
     <section id="tab-copilot-logs" class="tab-content">
       <div class="panel panel-fill">
         <div class="panel-header">
-          🤖 Copilot Prompt Runs
+          ✨ GenAI Agent Runs <span class="ai-pill" style="margin-left:8px">GitHub Copilot</span>
           <button class="btn btn-sm ml-auto" id="btnClearPromptHistory">Clear History</button>
         </div>
         <div class="section-block" style="border-bottom:1px solid var(--border)">
@@ -252,8 +326,8 @@
             <option value="claude-sonnet-4">Claude Sonnet 4</option>
             <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
           </select>
-          <label for="cpPromptInput" class="block-title">Prompt</label>
-          <textarea id="cpPromptInput" class="mini-textarea" rows="6" placeholder="Ask Copilot..."></textarea>
+          <label for="cpPromptInput" class="block-title">Prompt <span class="ai-tag green">Agent</span></label>
+          <textarea id="cpPromptInput" class="mini-textarea" rows="6" placeholder="Ask the GenAI Agent — powered by GitHub Copilot…"></textarea>
           <div class="action-row mt-sm">
             <label class="toggle-sm"><input type="checkbox" id="cpUseHistory" checked> Use previous runs as context</label>
             <button class="btn btn-accent btn-sm ml-auto" id="btnRunCopilotTabPrompt">Run Prompt</button>
@@ -277,6 +351,7 @@
       </div>
     </section>
   </main>
+  </div><!-- end app-layout -->
 
   <!-- ═══ MODAL — spinner / result ════════════════════════════════════ -->
   <div class="modal-overlay" id="modalOverlay" style="display:none">
@@ -287,10 +362,10 @@
     </div>
   </div>
 
-  <button id="copilotWindowToggle" class="copilot-window-toggle" title="Open Copilot">🤖 Copilot</button>
+  <button id="copilotWindowToggle" class="copilot-window-toggle" title="Open GitHub Copilot Agent">🤖 Copilot Agent</button>
   <section id="copilotWindow" class="copilot-window" style="display:none">
     <div class="copilot-window-header">
-      <span>GitHub Copilot</span>
+      <span>🤖 GitHub Copilot <span class="ai-tag purple" style="font-size:9px">Agent</span></span>
       <button id="btnCloseCopilotWindow" class="icon-btn" title="Close">✕</button>
     </div>
     <div class="copilot-window-body">
@@ -303,7 +378,7 @@
         <option value="claude-sonnet-4">Claude Sonnet 4</option>
         <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
       </select>
-      <textarea id="copilotPrompt" class="mini-textarea" rows="5" placeholder="Ask Copilot anything for this workflow..."></textarea>
+      <textarea id="copilotPrompt" class="mini-textarea" rows="5" placeholder="Ask the GenAI Agent anything — uses GitHub Copilot under the hood…"></textarea>
       <div class="action-row mt-sm">
         <button id="btnRunCopilotPrompt" class="btn btn-accent btn-sm">Run Prompt</button>
       </div>
@@ -312,6 +387,39 @@
     </div>
   </section>
 
-  <script src="/static/script.js?v=21"></script>
+  <!-- ═══ STATUSBAR ════════════════════════════════════════════════════ -->
+  <footer class="statusbar">
+    <div class="sb-left">
+      <span class="sb-item sb-item-accent">🧑‍💻 Job Application Agent</span>
+      <span class="sb-sep">·</span>
+      <span class="sb-item" id="sbSection">Resumes</span>
+    </div>
+    <div class="sb-right">
+      <span class="sb-item">🤖 GitHub Copilot</span>
+      <span class="sb-sep">·</span>
+      <span class="sb-item">✨ GenAI Powered</span>
+    </div>
+  </footer>
+  </div><!-- end app-frame -->
+
+  <script src="/static/script.js?v=27"></script>
+  <script src="/static/latex_line_numbers.js"></script>
+  <script>
+  (function(){
+    var sidebar = document.getElementById('appSidebar');
+    var collapseBtn = document.getElementById('btnCollapseSidebar');
+    if (collapseBtn && sidebar) {
+      collapseBtn.addEventListener('click', function() {
+        sidebar.classList.toggle('collapsed');
+      });
+    }
+    document.querySelectorAll('.tab-btn.nav-item').forEach(function(b){
+      b.addEventListener('click', function(){
+        var lbl = document.getElementById('sbSection');
+        if (lbl) lbl.textContent = b.querySelector('.nav-label') ? b.querySelector('.nav-label').textContent : '';
+      });
+    });
+  })();
+  </script>
 </body>
 </html>

@@ -13,6 +13,7 @@ def tailor_resume(
     job_description: str,
     sections: Optional[Dict] = None,
     master_profile: Optional[Dict] = None,
+    model: str = "",
 ) -> Dict:
     """
     Produce a tailored resume and improvement suggestions for a given job.
@@ -21,6 +22,11 @@ def tailor_resume(
         dict with tailored_resume, suggestions, keyword_analysis
     """
     keyword_analysis = extract_ats_keywords(resume_text, job_description)
+    latex_instruction = (
+        "5. Return a complete valid LaTeX source document with \\begin{document} and \\end{document}."
+        if "\\documentclass" in resume_text or "\\begin{document}" in resume_text
+        else "5. Return polished plain resume text."
+    )
 
     # Build a focused prompt from structured sections if available
     responsibilities = sections.get("responsibilities", "") if sections else ""
@@ -62,11 +68,12 @@ INSTRUCTIONS:
 2. Insert missing keywords naturally into existing bullets.
 3. Strengthen weak bullet points with quantified impact where possible.
 4. Ensure sections: Summary, Skills, Experience, Education.
-5. Return only the improved resume text — no commentary.
+{latex_instruction}
+6. Return only the improved resume text — no commentary or markdown fences.
 
 IMPROVED RESUME:"""
 
-    cli_meta = gh_copilot_suggest_with_meta(prompt)
+    cli_meta = gh_copilot_suggest_with_meta(prompt, model=model)
     tailored = cli_meta.get("stdout", "") if cli_meta.get("success") else ""
 
     return {
@@ -93,6 +100,7 @@ def generate_cover_letter_with_meta(
     company_name: str,
     job_title: str,
     candidate_name: str = "",
+    model: str = "",
 ) -> Dict:
     """
     Generate a professional cover letter tailored to the job with CLI metadata.
@@ -119,7 +127,7 @@ INSTRUCTIONS:
 
 COVER LETTER:"""
 
-    cli_meta = gh_copilot_suggest_with_meta(prompt)
+    cli_meta = gh_copilot_suggest_with_meta(prompt, model=model)
     text = cli_meta.get("stdout", "") if cli_meta.get("success") else ""
     return {
         "cover_letter": text,

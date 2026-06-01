@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from app import storage
-from app.resume_parser import latex_source_to_plain_text
+from app.resume_parser import ensure_compilable_latex_source, latex_source_to_plain_text
 from app.ats_checker import check_ats_compatibility
 
 UPLOAD_DIR = Path(__file__).parent.parent / "uploads"
@@ -25,6 +25,8 @@ def create_resume_entry(
     """Create and persist a new resume entry."""
     resume_id = str(uuid.uuid4())
     is_latex = source_format == "latex" or file_path.lower().endswith(".tex")
+    if is_latex:
+        resume_text = ensure_compilable_latex_source(resume_text, Path(filename or file_path).stem)
     plain_text = latex_source_to_plain_text(resume_text) if is_latex else resume_text
     updated_file_path = ""
     if is_latex:
@@ -69,6 +71,8 @@ def update_resume_text(resume_id: str, new_text: str) -> Optional[Dict]:
     if not resume:
         return None
     is_latex = resume.get("source_format") == "latex" or str(resume.get("original_file_path") or resume.get("file_path") or "").lower().endswith(".tex")
+    if is_latex:
+        new_text = ensure_compilable_latex_source(new_text, Path(resume.get("filename") or resume_id).stem)
     resume["text"] = new_text
     resume["version"] = resume.get("version", 1) + 1
     resume["updated_at"] = datetime.utcnow().isoformat()

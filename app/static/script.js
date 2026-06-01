@@ -1,4 +1,20 @@
-/* ResumeOps script.js v2 */
+/* Job Application Agent script.js v2 */
+
+/* ── Auth: inject X-Auth-Token into every /api/ request ─────────── */
+(function(){
+  const _orig = window.fetch;
+  window.fetch = function(url, opts){
+    opts = opts || {};
+    const token = localStorage.getItem('rops_token');
+    if (token && typeof url === 'string' && url.startsWith('/api/')) {
+      const headers = new Headers(opts.headers || {});
+      if (!headers.has('X-Auth-Token')) headers.set('X-Auth-Token', token);
+      opts = Object.assign({}, opts, { headers });
+    }
+    return _orig.call(this, url, opts);
+  };
+})();
+
 const API = '';
 let state = { resumes:[], jobs:[], applicationFiles:[], copilotRuns:[], selectedResumeId:null, selectedJobId:null, jobFilter:'', selectedResumeSemanticText:'', selectedResumeIsLatex:false, latexPdfVisible:true };
 const LATEX_SPLIT_STORAGE_KEY = 'resumeops.latexSplitPct';
@@ -17,6 +33,11 @@ async function apiJSON(path, method, body) {
 }
 const qs  = sel => document.querySelector(sel);
 const qsa = sel => [...document.querySelectorAll(sel)];
+
+/** Returns the model selected in the LLM ATS bar (empty string = auto/default). */
+function getSelectedModel() {
+  return (qs('#atsLlmModel')?.value || '').trim();
+}
 
 function applyLatexSplit(splitPct) {
   const pct = Math.max(35, Math.min(75, Number(splitPct) || 56));
@@ -46,7 +67,7 @@ function initLatexEditorFontSize() {
 
 function initLatexDivider() {
   const divider = qs('#latexDivider');
-  const wrap = qs('#resumeEditorWrap');
+  const wrap = qs('#latexEditorWrap');
   if (!divider || !wrap) return;
 
   const stored = (() => {
@@ -87,7 +108,7 @@ function initLatexDivider() {
 
 function setLatexPdfVisibility(visible, persist = true) {
   state.latexPdfVisible = !!visible;
-  const wrap = qs('#resumeEditorWrap');
+  const wrap = qs('#latexEditorWrap');
   const btn = qs('#btnToggleLatexPdf');
   if (wrap) wrap.classList.toggle('latex-pdf-hidden', state.selectedResumeIsLatex && !state.latexPdfVisible);
   if (btn) btn.textContent = state.latexPdfVisible ? 'Hide PDF' : 'Show PDF';
@@ -155,6 +176,11 @@ function escapeHtml(s='') {
     .replace(/>/g, '&gt;');
 }
 
+function sanitizeLatexContent(s='') {
+  // Removes common artifacts or normalize line endings if needed
+  return s.replace(/\r\n/g, '\n');
+}
+
 function highlightLatexLine(line='') {
   const escaped = escapeHtml(line);
   const tokens = [];
@@ -190,7 +216,53 @@ function updateLatexPreview() {
   const preview = qs('#latexPreview');
   if (!preview) return;
   const text = qs('#resumeTextarea').value || '';
-  preview.innerHTML = text.split('\n').map(highlightLatexLine).join('\n');
+  const lines = text.split('\n');
+  preview.innerHTML = lines.map((line, idx) => {
+    const html = highlightLatexLine(line) || '&nbsp;';
+    return `<div class="lx-line"><div class="lx-src">${html}</div></div>`;
+  }).join('');
+}
+
+function setLatexErrorsVisible(visible) {
+  const panel = qs('#latexErrorsPanel');
+  if (!panel) return;
+  panel.style.display = visible ? 'flex' : 'none';
+}
+
+function renderLatexErrors(errors = [], ok = false) {
+  const list = qs('#latexErrorsList');
+  if (!list) return;
+
+  if (!errors.length) {
+    list.innerHTML = ok
+      ? '<div class="latex-errors-ok">No LaTeX errors found.</div>'
+      : '<div class="latex-errors-hint">No LaTeX errors to show.</div>';
+    return;
+  }
+
+  list.innerHTML = errors.map(err => {
+    const lineLabel = err.line ? `line ${err.line}` : 'line ?';
+    const message = escapeHtml(err.message || 'Unknown LaTeX error');
+    const context = err.context ? `<div class="latex-errors-hint">${escapeHtml(err.context)}</div>` : '';
+    return `<div class="latex-error-item"><span class="latex-error-line">${lineLabel}</span><div class="latex-error-msg">${message}${context}</div></div>`;
+  }).join('');
+}
+
+async function refreshLatexErrors(sourceText = '') {
+  if (!state.selectedResumeId || !state.selectedResumeIsLatex) return;
+  const list = qs('#latexErrorsList');
+  if (list) list.innerHTML = '<div class="latex-errors-hint">Checking LaTeX errors...</div>';
+
+  try {
+    const payload = {};
+    if (typeof sourceText === 'string') payload.source_text = sourceText;
+    const result = await apiJSON(`/api/resumes/${state.selectedResumeId}/latex-errors`, 'POST', payload);
+    renderLatexErrors(result.errors || [], !!result.ok);
+  } catch (err) {
+    if (list) {
+      list.innerHTML = `<div class="latex-error-msg">Unable to check LaTeX errors: ${escapeHtml(err.message)}</div>`;
+    }
+  }
 }
 
 function formatLatexSource(sourceText = '', indentSize = 2) {
@@ -267,8 +339,39 @@ function showModal(spinning=true, msg='') {
   qs('#modalMessage').style.display = msg ? 'block' : 'none';
   qs('#modalMessage').textContent   = msg;
   qs('#modalClose').style.display   = msg ? 'inline-block' : 'none';
+  // Hide the confirm button from showModalForm if present
+  const confirm = qs('#modalConfirm');
+  if (confirm) confirm.style.display = 'none';
 }
 function hideModal() { qs('#modalOverlay').style.display = 'none'; }
+
+// Show a modal containing custom HTML with Confirm/Cancel handlers
+function showModalForm(html, confirmLabel='Run', onConfirm=null, onCancel=null) {
+  const overlay = qs('#modalOverlay');
+  const spinner = qs('#modalSpinner');
+  const msg = qs('#modalMessage');
+  spinner.style.display = 'none';
+  msg.style.display = 'block';
+  msg.innerHTML = html;
+
+  const close = qs('#modalClose');
+  close.style.display = 'inline-block';
+  close.textContent = 'Cancel';
+  close.onclick = () => { hideModal(); if (onCancel) onCancel(); };
+
+  let confirm = qs('#modalConfirm');
+  if (!confirm) {
+    confirm = document.createElement('button');
+    confirm.id = 'modalConfirm';
+    confirm.className = 'btn btn-sm mt';
+    document.querySelector('.modal-box').appendChild(confirm);
+  }
+  confirm.textContent = confirmLabel || 'Run';
+  confirm.style.display = 'inline-block';
+  confirm.onclick = () => { if (onConfirm) onConfirm(); };
+
+  overlay.style.display = 'flex';
+}
 
 function setStatus(msg, cls='') {
   const b = qs('#statusBadge');
@@ -372,9 +475,16 @@ qsa('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
   qsa('.tab-content').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   qs('#tab-' + btn.dataset.tab).classList.add('active');
-  if (btn.dataset.tab === 'jobs')    loadJobStats();
+  if (btn.dataset.tab === 'jobs')         loadJobStats();
   if (btn.dataset.tab === 'applications') loadApplicationFiles();
 }));
+
+qs('#btnOpenLatexTab')?.addEventListener('click', () => {
+  qsa('.tab-btn').forEach(b => b.classList.remove('active'));
+  qsa('.tab-content').forEach(t => t.classList.remove('active'));
+  qs('.tab-btn[data-tab="latex"]').classList.add('active');
+  qs('#tab-latex').classList.add('active');
+});
 
 function formatDateTime(iso) {
   if (!iso) return '—';
@@ -426,6 +536,21 @@ qs('#themeToggle').addEventListener('click', () => {
   qs('#themeToggle').textContent = dark ? '\u{1F319}' : '\u2600\uFE0F';
 });
 qs('#modalClose').addEventListener('click', hideModal);
+
+/* ── LOGOUT ─────────────────────────────────────────── */
+qs('#btnLogout')?.addEventListener('click', async () => {
+  const token = localStorage.getItem('rops_token');
+  if (token) {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }).catch(() => {});
+  }
+  localStorage.removeItem('rops_token');
+  localStorage.removeItem('rops_username');
+  window.location.href = '/login';
+});
 
 /* ── GLOBAL COPILOT WINDOW ───────────────────────────────────── */
 function setCopilotWindowOpen(open) {
@@ -559,45 +684,95 @@ function selectResume(id) {
   renderResumeList();
   const r = state.resumes.find(x => x.id === id);
   if (!r) return;
+
+  const fname = (r.file_path || '').toLowerCase();
+  const isLatex = r.source_format === 'latex' || fname.endsWith('.tex');
+  const isPdf = fname.endsWith('.pdf');
+  const isDocx = fname.endsWith('.docx');
+
   state.selectedResumeSemanticText = r.plain_text || r.text || '';
-  state.selectedResumeIsLatex = r.source_format === 'latex' || (r.file_path || '').toLowerCase().endsWith('.tex');
-  qs('#resumeEmptyState').style.display  = 'none';
-  qs('#resumeTextarea').style.display    = 'flex';
-  qs('#resumeTextarea').value            = r.text || '';
-  qs('#resumeHeader').style.display      = 'flex';
-  qs('#resumeFilename').textContent      = r.filename + ((r.source_format === 'latex' || (r.file_path || '').toLowerCase().endsWith('.tex')) ? ' (LaTeX)' : '');
-  qs('#resumeVersion').textContent       = 'v' + r.version;
-  qs('#resumeTags').innerHTML            = (r.tags||[]).map(t => `<span class="tag-item">${t}</span>`).join('');
-  qs('#atsBar').style.display            = 'flex';
-  const isLatex = state.selectedResumeIsLatex;
-  const compileBtn = qs('#btnCompileLatexPdf');
-  const togglePdfBtn = qs('#btnToggleLatexPdf');
+  state.selectedResumeIsLatex = isLatex;
+
+  /* ── Resume tab: show text preview ──────────────────── */
+  qs('#resumeEmptyState').style.display        = 'none';
+  qs('#resumeTextPreviewWrap').style.display   = 'block';
+  const previewText = r.plain_text || r.text || '';
+  qs('#resumeTextPreview').textContent         = previewText || '(No text extracted for this file)';
+
+  qs('#resumeHeader').style.display            = 'flex';
+  qs('#resumeFilename').textContent = r.filename + (isLatex ? ' (LaTeX)' : isDocx ? ' (DOCX)' : isPdf ? ' (PDF)' : '');
+  qs('#resumeVersion').textContent  = 'v' + r.version;
+  qs('#resumeTags').innerHTML       = (r.tags||[]).map(t => `<span class="tag-item">${t}</span>`).join('');
+
+  const openLatexBtn = qs('#btnOpenLatexTab');
+  if (openLatexBtn) openLatexBtn.style.display = isLatex ? 'inline-block' : 'none';
+
   const exportDrop = qs('#btnExportDrop');
-  const originalBtn = qs('#btnDownloadOriginalResume');
-  const updatedBtn = qs('#btnDownloadUpdatedResume');
-    const latexEditorControls = qs('#latexEditorControls');
-  const latexPreview = qs('#latexPreview');
-  const latexDivider = qs('#latexDivider');
-  const latexPdfFrame = qs('#latexPdfFrame');
-  const editorWrap = qs('#resumeEditorWrap');
-  if (editorWrap) editorWrap.classList.toggle('latex-mode', isLatex);
-  if (editorWrap) editorWrap.classList.toggle('latex-pdf-hidden', isLatex && !state.latexPdfVisible);
-  if (latexPreview) latexPreview.style.display = isLatex ? 'block' : 'none';
-  if (latexDivider) latexDivider.style.display = (isLatex && state.latexPdfVisible) ? 'block' : 'none';
-  if (latexPdfFrame) latexPdfFrame.style.display = (isLatex && state.latexPdfVisible) ? 'block' : 'none';
-  if (compileBtn) compileBtn.style.display = isLatex ? 'inline-block' : 'none';
-    if (latexEditorControls) latexEditorControls.style.display = isLatex ? 'inline-flex' : 'none';
-  if (togglePdfBtn) {
-    togglePdfBtn.style.display = isLatex ? 'inline-block' : 'none';
-    togglePdfBtn.textContent = state.latexPdfVisible ? 'Hide PDF' : 'Show PDF';
+  if (exportDrop) exportDrop.parentElement.style.display = (isLatex || isDocx) ? 'none' : 'inline-block';
+
+  qs('#atsBar').style.display = 'flex';
+
+  /* ── LaTeX tab: populate editor ─────────────────────── */
+  const latexTabFilename = qs('#latexTabFilename');
+  const latexTabActions  = qs('#latexTabActions');
+  const latexEditorEmpty = qs('#latexEditorEmptyState');
+  const editorContainer  = qs('#resumeEditorContainer');
+  const latexPreview     = qs('#latexPreview');
+  const latexDivider     = qs('#latexDivider');
+  const latexPdfFrame    = qs('#latexPdfFrame');
+  const editorWrap       = qs('#latexEditorWrap');
+  const compileBtn       = qs('#btnCompileLatexPdf');
+  const togglePdfBtn     = qs('#btnToggleLatexPdf');
+  const latexEditorControls = qs('#latexEditorControls');
+  const originalBtn      = qs('#btnDownloadOriginalResume');
+  const updatedBtn       = qs('#btnDownloadUpdatedResume');
+
+  if (latexTabFilename) latexTabFilename.textContent = r.filename + (isLatex ? ' (LaTeX)' : '');
+  if (latexTabFilename) latexTabFilename.style.color = '';
+  if (latexTabActions)  latexTabActions.style.display = 'flex';
+  if (latexEditorEmpty) latexEditorEmpty.style.display = 'none';
+  if (editorContainer)  editorContainer.style.display  = 'block';
+
+  qs('#resumeTextarea').value       = sanitizeLatexContent(r.text || '');
+  qs('#resumeTextarea').scrollTop   = 0;
+
+  const previewEnabled = isLatex || isPdf;
+  if (editorWrap) {
+    editorWrap.classList.toggle('latex-mode', previewEnabled);
+    editorWrap.classList.toggle('latex-pdf-hidden', previewEnabled && !state.latexPdfVisible);
   }
-  if (exportDrop) exportDrop.parentElement.style.display = isLatex ? 'none' : 'inline-block';
+
+  setLatexErrorsVisible(isLatex);
+  if (latexPreview)  latexPreview.style.display = isLatex ? 'block' : 'none';
+  if (latexDivider)  latexDivider.style.display = (previewEnabled && state.latexPdfVisible) ? 'block' : 'none';
+  if (latexPdfFrame) latexPdfFrame.style.display = (previewEnabled && state.latexPdfVisible) ? 'block' : 'none';
+
+  if (compileBtn)          compileBtn.style.display         = isLatex ? 'inline-block' : 'none';
+  if (latexEditorControls) latexEditorControls.style.display = isLatex ? 'inline-flex' : 'none';
+  if (togglePdfBtn) {
+    togglePdfBtn.style.display = previewEnabled ? 'inline-block' : 'none';
+    togglePdfBtn.textContent   = state.latexPdfVisible ? 'Hide PDF' : 'Show PDF';
+  }
   if (originalBtn) originalBtn.style.display = isLatex ? 'inline-block' : 'none';
-  if (updatedBtn) updatedBtn.style.display = isLatex ? 'inline-block' : 'none';
+  if (updatedBtn)  updatedBtn.style.display  = isLatex ? 'inline-block' : 'none';
+
+  // Show proof button if ATS data exists
+  const proofBtn = qs('#btnShowAtsProof');
+  if (proofBtn) proofBtn.style.display = (r.ats_analysis && (r.ats_analysis.issues||[]).length > 0) ? 'inline-block' : 'none';
+
+  if (previewEnabled && state.latexPdfVisible) {
+    if (isLatex) {
+        refreshLatexPdfEmbed();
+    } else {
+        refreshLatexPdfEmbed(`/api/resumes/${id}/preview-pdf`);
+    }
+  }
+
   if (isLatex) {
     updateLatexPreview();
-    if (state.latexPdfVisible) refreshLatexPdfEmbed();
+    refreshLatexErrors(qs('#resumeTextarea').value || '');
   }
+  
   const ats = r.ats_analysis;
   if (ats?.ats_score != null) {
     qs('#atsFill').style.width   = ats.ats_score + '%';
@@ -633,7 +808,48 @@ function renderAtsDetails(ats) {
      <div class="issue-list">${issues}</div>
      ${matched ? '<div class="block-title mt">Matched Keywords</div><div class="kw-row">'+matched+'</div>' : ''}
      ${missing ? '<div class="block-title mt">Missing Keywords</div><div class="kw-row kw-missing">'+missing+'</div>' : ''}`;
+     
+  // Show proof button if there are issues
+  const proofBtn = qs('#btnShowAtsProof');
+  if (proofBtn) proofBtn.style.display = (ats.issues||[]).length > 0 ? 'inline-block' : 'none';
 }
+
+/* — Show ATS Proof ——————————————————————————————————————————— */
+qs('#btnShowAtsProof').addEventListener('click', () => {
+    const r = state.resumes.find(x => x.id === state.selectedResumeId);
+    if (!r || !r.ats_analysis) return;
+    
+    const ats = r.ats_analysis;
+    const issues = ats.issues || [];
+    
+    let html = `
+        <div style="text-align:left; max-height:400px; overflow-y:auto; padding-right:10px;">
+            <h3 style="margin-top:0; color:var(--accent);">ATS Optimization Proof</h3>
+            <p style="font-size:12px; color:var(--text2); margin-bottom:15px;">Targeted evidence of issues found by the ATS scanner. Addressing these will improve your score.</p>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+    `;
+    
+    issues.forEach((issue, idx) => {
+        const sev = issue.severity || 'low';
+        const sevColor = sev === 'critical' || sev === 'high' ? 'var(--red)' : sev === 'warning' || sev === 'medium' ? 'var(--yellow)' : 'var(--green)';
+        
+        html += `
+            <div style="padding:10px; border-radius:6px; background:rgba(0,0,0,0.03); border-left:4px solid ${sevColor}">
+                <div style="font-weight:600; font-size:13px; margin-bottom:4px;">${issue.message}</div>
+                ${issue.detail ? `<div style="font-family:monospace; font-size:11px; color:var(--text2); background:rgba(255,255,255,0.5); padding:6px; border-radius:4px; margin-top:6px; white-space:pre-wrap;">${issue.detail}</div>` : ''}
+            </div>
+        `;
+    });
+    
+    html += `</div></div>`;
+    
+    showModalForm(html, 'Close', () => hideModal(), () => hideModal());
+    // Customize the button to just be "Close"
+    const confirmBtn = qs('#modalConfirm');
+    if (confirmBtn) confirmBtn.style.display = 'none';
+    const closeBtn = qs('#modalClose');
+    if (closeBtn) closeBtn.textContent = 'Close';
+});
 
 qs('#resumeSearch').addEventListener('input', renderResumeList);
 qs('#showArchived').addEventListener('change', loadResumes);
@@ -677,6 +893,7 @@ qs('#btnSaveText').addEventListener('click', async () => {
       });
       await loadApplicationFiles();
       if (state.latexPdfVisible) refreshLatexPdfEmbed(compileResult.preview_url || compileResult.download_url || '');
+      await refreshLatexErrors(qs('#resumeTextarea').value || '');
     }
     await loadResumes(); selectResume(state.selectedResumeId); setStatus('Saved','ok');
   } catch(err) {
@@ -703,16 +920,28 @@ qs('#btnDeleteResume').addEventListener('click', async () => {
 });
 
 function clearResumeView() {
-  qs('#resumeHeader').style.display     = 'none';
-  qs('#resumeEmptyState').style.display = 'flex';
-  qs('#resumeTextarea').style.display   = 'none';
-  qs('#atsBar').style.display           = 'none';
-  qs('#latexPreview').style.display     = 'none';
-  qs('#latexDivider').style.display     = 'none';
-  qs('#latexPdfFrame').style.display    = 'none';
+  // Resume tab
+  qs('#resumeHeader').style.display          = 'none';
+  qs('#resumeEmptyState').style.display      = 'flex';
+  qs('#resumeTextPreviewWrap').style.display = 'none';
+  qs('#resumeTextPreview').textContent       = '';
+  qs('#atsBar').style.display                = 'none';
+  // LaTeX tab
+  const latexTabFilename = qs('#latexTabFilename');
+  const latexTabActions  = qs('#latexTabActions');
+  const latexEditorEmpty = qs('#latexEditorEmptyState');
+  if (latexTabFilename) { latexTabFilename.textContent = 'No resume selected'; latexTabFilename.style.color = 'var(--text2)'; }
+  if (latexTabActions)  latexTabActions.style.display  = 'none';
+  if (latexEditorEmpty) latexEditorEmpty.style.display = 'flex';
+  qs('#resumeEditorContainer').style.display = 'none';
+  qs('#latexPreview').style.display          = 'none';
+  qs('#latexDivider').style.display          = 'none';
+  qs('#latexPdfFrame').style.display         = 'none';
   qs('#latexPdfFrame').removeAttribute('src');
   qs('#latexPdfFrame').removeAttribute('srcdoc');
-  qs('#resumeEditorWrap').classList.remove('latex-mode');
+  qs('#latexEditorWrap').classList.remove('latex-mode');
+  setLatexErrorsVisible(false);
+  renderLatexErrors([], false);
   state.selectedResumeIsLatex = false;
 }
 
@@ -726,11 +955,43 @@ qs('#btnCheckAts').addEventListener('click', async () => {
       resume_text: state.selectedResumeSemanticText || qs('#resumeTextarea').value,
       job_description: job?.description || ''
     });
+    
+    // Update local state so "Show Proof" button has access
+    const rIdx = state.resumes.findIndex(rx => rx.id === state.selectedResumeId);
+    if (rIdx !== -1) state.resumes[rIdx].ats_analysis = ats;
+
     qs('#atsFill').style.width  = ats.ats_score + '%';
     qs('#atsFill').className    = 'ats-fill ' + scoreColor(ats.ats_score);
     qs('#atsScore').textContent = ats.ats_score + '%';
     renderAtsDetails(ats); hideModal(); setStatus('ATS checked','ok');
   } catch(err) { showModal(false, 'ATS check failed: '+err.message); setStatus('Error',''); }
+});
+
+/* — Check ATS (LLM) ─────────────────────────────────────────── */
+qs('#btnCheckAtsLlm').addEventListener('click', async () => {
+  if (!state.selectedResumeId) return;
+  const job = state.jobs.find(j => j.id === state.selectedJobId);
+  showModal(true); setStatus('Running LLM ATS analysis\u2026', 'busy');
+  try {
+    const ats = await apiJSON('/api/ats/check-llm', 'POST', {
+      resume_text: state.selectedResumeSemanticText || qs('#resumeTextarea').value,
+      job_description: job?.description || '',
+      model: getSelectedModel()
+    });
+
+    const rIdx = state.resumes.findIndex(rx => rx.id === state.selectedResumeId);
+    if (rIdx !== -1) state.resumes[rIdx].ats_analysis = ats;
+
+    qs('#atsFill').style.width  = ats.ats_score + '%';
+    qs('#atsFill').className    = 'ats-fill ' + scoreColor(ats.ats_score);
+    qs('#atsScore').textContent = ats.ats_score + '%';
+    renderAtsDetails(ats);
+    hideModal();
+    setStatus('LLM ATS complete' + (ats.llm ? ' \u2736' : ' (fallback)'), 'ok');
+
+    const proofBtn = qs('#btnShowAtsProof');
+    if (proofBtn) proofBtn.style.display = (ats.issues||[]).length > 0 ? 'inline-block' : 'none';
+  } catch(err) { showModal(false, 'LLM ATS failed: '+err.message); setStatus('Error',''); }
 });
 
 async function downloadResumeFile(kind) {
@@ -778,6 +1039,7 @@ qs('#btnCompileLatexPdf').addEventListener('click', async () => {
       source_text: qs('#resumeTextarea').value,
     });
     await loadApplicationFiles();
+    await refreshLatexErrors(qs('#resumeTextarea').value || '');
     hideModal();
     setStatus('Compiled PDF ready', 'ok');
     if (state.latexPdfVisible && (r.preview_url || r.download_url)) {
@@ -821,9 +1083,9 @@ qs('#btnFormatLatex').addEventListener('click', () => {
   const after = formatLatexSource(before);
   ta.value = after;
   updateLatexPreview();
+  refreshLatexErrors(after);
   setStatus(before === after ? 'LaTeX already formatted' : 'LaTeX formatted', 'ok');
 });
-  qs('#latexEditorControls').style.display = 'none';
 
 /* — Export ——————————————————————————————————————————————————— */
 qs('#btnExportDrop').addEventListener('click', e => {
@@ -899,14 +1161,14 @@ function selectJob(id) {
   qs('#jobDetailTitle').textContent     = j.job_title || '\u2014';
   qs('#jobDetailCompany').textContent   = j.company || '';
   qs('#jobStatusSelect').value          = j.status || 'saved';
-  qs('#jLocation').textContent     = (j.locations||[]).join(', ') || '\u2014';
-  qs('#jType').textContent         = j.job_type || '\u2014';
+  qs('#jLocation').value           = (j.locations||[]).join(', ') || '';
+  qs('#jType').value               = j.job_type || '';
   qs('#jSponsorship').textContent  = j.sponsorship_required || '\u2014';
-  qs('#jSalary').textContent       = j.salary_range || '\u2014';
-  qs('#jBand').textContent         = j.band_level || '\u2014';
-  qs('#jExp').textContent          = j.experience_requirements || '\u2014';
+  qs('#jSalary').value             = j.salary_range || '';
+  qs('#jBand').value               = j.band_level || '';
+  qs('#jExp').value                = j.experience_requirements || '';
   qs('#jApplied').textContent      = j.applied_date || '\u2014';
-  qs('#jDeadline').textContent     = j.deadline || '\u2014';
+  qs('#jDeadline').value           = j.deadline || '';
   const url = j.job_url || '';
   qs('#jUrl').innerHTML = url ? `<a href="${url}" target="_blank" style="color:var(--accent)">Open \u2197</a>` : '\u2014';
   qs('#jobResumeSelect').value = j.resume_id || '';
@@ -984,7 +1246,7 @@ qs('#btnGenerateRecommendations').addEventListener('click', async () => {
   if (!resumeId) { setStatus('Select a resume first', ''); return; }
   showModal(true); setStatus('Generating recommendations…', 'busy');
   try {
-    const r = await apiJSON('/api/jobs/' + state.selectedJobId + '/recommendations', 'POST', { resume_id: resumeId });
+    const r = await apiJSON('/api/jobs/' + state.selectedJobId + '/recommendations', 'POST', { resume_id: resumeId, model: getSelectedModel() });
     qs('#jRecommendationsArea').value = r.recommendations || '';
     qs('#btnApplyRecommendations').style.display = (r.recommendations || '').trim() ? 'inline-block' : 'none';
     updateCliStatus(r.cli_status || { task: 'resume_recommendations', success: false, error: 'No CLI metadata returned' });
@@ -1027,7 +1289,7 @@ qs('#btnGenerateCoverLetter').addEventListener('click', async () => {
   if (!resumeId) { setStatus('Select a resume first', ''); return; }
   showModal(true); setStatus('Generating cover letter…', 'busy');
   try {
-    const r = await apiJSON('/api/cover-letter', 'POST', { job_id: state.selectedJobId, resume_id: resumeId });
+    const r = await apiJSON('/api/cover-letter', 'POST', { job_id: state.selectedJobId, resume_id: resumeId, model: getSelectedModel() });
     qs('#jobCoverLetterArea').value = r.cover_letter || '';
     updateCliStatus(r.cli_status || { task: 'cover_letter', success: false, error: 'No CLI metadata returned' });
     hideModal(); setStatus('Cover letter ready', 'ok');
@@ -1045,61 +1307,95 @@ qs('#btnSaveCoverLetter').addEventListener('click', async () => {
 /* — Copilot Fill Job ———————————————————————————————————————— */
 qs('#btnCopilotFillJob').addEventListener('click', async () => {
   if (!state.selectedJobId) return;
-  showModal(true); setStatus('Copilot analyzing job…', 'busy');
-  try {
-    const resumeId = qs('#jobResumeSelect').value || state.selectedResumeId || '';
-    const myInfo = qs('#jMyInfoArea').value.trim();
-    const r = await apiFetch(
-      '/api/jobs/' + state.selectedJobId + '/copilot-fill' + (myInfo ? '?my_info=1' : ''),
-      { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ my_info: myInfo, resume_id: resumeId }) }
-    );
-    const f = r.fields || {};
-    const myInfoParts = [];
-    if (f.summary) myInfoParts.push(`Summary: ${f.summary}`);
-    if (f.job_title) myInfoParts.push(`Title: ${f.job_title}`);
-    if (f.company) myInfoParts.push(`Company: ${f.company}`);
-    if (f.locations?.length) myInfoParts.push(`Locations: ${f.locations.join(', ')}`);
-    if (f.job_type) myInfoParts.push(`Job Type: ${f.job_type}`);
-    if (f.sponsorship_required) myInfoParts.push(`Sponsorship: ${f.sponsorship_required}`);
-    if (f.salary_range) myInfoParts.push(`Salary: ${f.salary_range}`);
-    if (f.band_level) myInfoParts.push(`Band: ${f.band_level}`);
-    if (f.experience_requirements) myInfoParts.push(`Experience: ${f.experience_requirements}`);
-    if (f.deadline) myInfoParts.push(`Deadline: ${f.deadline}`);
-    if (myInfo) myInfoParts.push(`User Notes:\n${myInfo}`);
-    const mergedMyInfo = myInfoParts.join('\n\n');
 
-    // Update meta grid live
-    if (f.locations?.length)           qs('#jLocation').textContent     = f.locations.join(', ');
-    if (f.job_type)                     qs('#jType').textContent         = f.job_type;
-    if (f.sponsorship_required)         qs('#jSponsorship').textContent  = f.sponsorship_required;
-    if (f.salary_range)                 qs('#jSalary').textContent       = f.salary_range;
-    if (f.band_level)                   qs('#jBand').textContent         = f.band_level;
-    if (f.experience_requirements)      qs('#jExp').textContent          = f.experience_requirements;
-    if (f.deadline)                     qs('#jDeadline').textContent     = f.deadline;
-    if (f.job_title)                    qs('#jobDetailTitle').textContent = f.job_title;
-    if (f.company)                      qs('#jobDetailCompany').textContent = f.company;
+  // Build model select HTML from existing model selects
+  const modelSource = qs('#copilotModel') || qs('#cpModel');
+  const optionsHtml = modelSource ? modelSource.innerHTML : '<option value="">Auto (default)</option>';
+  const formHtml = `
+    <label class="block-title">Choose model</label>
+    <select id="modalModelSelect" class="sel" style="width:100%">${optionsHtml}</select>
+    <p style="font-size:12px;color:var(--text2);margin-top:8px">Select a model for this Copilot run. Choosing a cheaper model may reduce cost.</p>
+  `;
 
-    // Show summary and save all extracted info into My Info
-    if (f.summary) {
-      qs('#jSummaryText').textContent    = f.summary;
-      qs('#jSummaryText').style.display  = 'block';
-      qs('#jSummaryPlaceholder').style.display = 'none';
-    }
+  showModalForm(formHtml, 'Run', async () => {
+    // User confirmed — run Copilot with selected model
+    hideModal();
+    showModal(true); setStatus('Copilot analyzing job…', 'busy');
+    try {
+      const resumeId = qs('#jobResumeSelect').value || state.selectedResumeId || '';
+      const myInfo = qs('#jMyInfoArea').value.trim();
+      const selectedModel = (qs('#modalModelSelect') ? qs('#modalModelSelect').value.trim() : '') || '';
+      const r = await apiFetch(
+        '/api/jobs/' + state.selectedJobId + '/copilot-fill' + (myInfo ? '?my_info=1' : ''),
+        { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ my_info: myInfo, resume_id: resumeId, model: selectedModel }) }
+      );
+      const f = r.fields || {};
+      const myInfoParts = [];
+      if (f.summary) myInfoParts.push(`Summary: ${f.summary}`);
+      if (f.job_title) myInfoParts.push(`Title: ${f.job_title}`);
+      if (f.company) myInfoParts.push(`Company: ${f.company}`);
+      if (f.locations?.length) myInfoParts.push(`Locations: ${f.locations.join(', ')}`);
+      if (f.job_type) myInfoParts.push(`Job Type: ${f.job_type}`);
+      if (f.sponsorship_required) myInfoParts.push(`Sponsorship: ${f.sponsorship_required}`);
+      if (f.salary_range) myInfoParts.push(`Salary: ${f.salary_range}`);
+      if (f.band_level) myInfoParts.push(`Band: ${f.band_level}`);
+      if (f.experience_requirements) myInfoParts.push(`Experience: ${f.experience_requirements}`);
+      if (f.deadline) myInfoParts.push(`Deadline: ${f.deadline}`);
+      if (myInfo) myInfoParts.push(`User Notes:\n${myInfo}`);
+      const mergedMyInfo = myInfoParts.join('\n\n');
 
-    if (mergedMyInfo.trim()) {
-      qs('#jMyInfoArea').value = mergedMyInfo;
-      await apiJSON('/api/jobs/' + state.selectedJobId, 'PATCH', {
-        copilot_summary: f.summary || '',
-        my_info: mergedMyInfo,
-      });
-    }
+      // Update meta grid live
+      if (f.locations?.length)           qs('#jLocation').value           = f.locations.join(', ');
+      if (f.job_type)                     qs('#jType').value               = f.job_type;
+      if (f.sponsorship_required)         qs('#jSponsorship').textContent  = f.sponsorship_required;
+      if (f.salary_range)                 qs('#jSalary').value             = f.salary_range;
+      if (f.band_level)                   qs('#jBand').value               = f.band_level;
+      if (f.experience_requirements)      qs('#jExp').value                = f.experience_requirements;
+      if (f.deadline)                     qs('#jDeadline').value           = f.deadline;
+      if (f.job_title)                    qs('#jobDetailTitle').textContent = f.job_title;
+      if (f.company)                      qs('#jobDetailCompany').textContent = f.company;
 
-    updateCliStatus(r.cli_status);
-    await loadJobs();
-    hideModal(); setStatus('Job filled by Copilot', 'ok');
-  } catch(err) { showModal(false, 'Copilot fill failed: ' + err.message); setStatus('Error',''); }
+      // Show summary and save all extracted info into My Info
+      if (f.summary) {
+        qs('#jSummaryText').textContent    = f.summary;
+        qs('#jSummaryText').style.display  = 'block';
+        qs('#jSummaryPlaceholder').style.display = 'none';
+      }
+
+      if (mergedMyInfo.trim()) {
+        qs('#jMyInfoArea').value = mergedMyInfo;
+        await apiJSON('/api/jobs/' + state.selectedJobId, 'PATCH', {
+          copilot_summary: f.summary || '',
+          my_info: mergedMyInfo,
+        });
+      }
+
+      updateCliStatus(r.cli_status);
+      await loadJobs();
+      hideModal(); setStatus('Job filled by Copilot', 'ok');
+    } catch(err) { showModal(false, 'Copilot fill failed: ' + err.message); setStatus('Error',''); }
+  }, () => {
+    // Cancel callback — nothing to do
+  });
 });
 
+
+qs('#btnSaveJobMeta').addEventListener('click', async () => {
+  if (!state.selectedJobId) return;
+  const locRaw = qs('#jLocation').value.trim();
+  const fields = {
+    locations: locRaw ? locRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
+    job_type: qs('#jType').value || '',
+    salary_range: qs('#jSalary').value.trim(),
+    band_level: qs('#jBand').value.trim(),
+    experience_requirements: qs('#jExp').value.trim(),
+    deadline: qs('#jDeadline').value || '',
+  };
+  try {
+    await apiJSON('/api/jobs/'+state.selectedJobId, 'PATCH', fields);
+    await loadJobs(); selectJob(state.selectedJobId); setStatus('Fields saved', 'ok');
+  } catch(err) { setStatus('Error: '+err.message, ''); }
+});
 
 qs('#btnSaveJobStatus').addEventListener('click', async () => {
   if (!state.selectedJobId) return;
@@ -1233,6 +1529,19 @@ qs('#applicationFilesList').addEventListener('click', async (e) => {
 });
 
 async function init() {
+  /* auth guard */
+  const _token = localStorage.getItem('rops_token');
+  if (!_token) { window.location.href = '/login'; return; }
+  try {
+    const meRes = await fetch('/api/auth/me', { headers: { 'X-Auth-Token': _token } });
+    if (!meRes.ok) { localStorage.removeItem('rops_token'); window.location.href = '/login'; return; }
+    const me = await meRes.json();
+    const usernameEl = document.getElementById('titlebarUsername');
+    if (usernameEl) { usernameEl.textContent = String.fromCodePoint(0x1F464) + ' ' + (me.username || ''); usernameEl.style.display = 'inline-flex'; }
+    const logoutBtn = document.getElementById('btnLogout');
+    if (logoutBtn) logoutBtn.style.display = 'inline-flex';
+  } catch(_e) { window.location.href = '/login'; return; }
+
   setStatus('Loading\u2026','busy');
     initLatexEditorFontSize();
   loadCopilotRunsFromStorage();
@@ -1244,7 +1553,52 @@ async function init() {
   } catch (_) {}
   initLatexDivider();
   initRightPaneResizers();
-  try { await Promise.all([loadResumes(), loadJobs(), loadApplicationFiles()]); setStatus('Ready','ok'); }
+  try { await Promise.all([loadResumes(), loadJobs(), loadApplicationFiles(), loadCopilotModels()]); setStatus('Ready','ok'); }
   catch(err) { setStatus('Error loading data',''); console.error(err); }
 }
 init();
+
+
+async function loadCopilotModels() {
+  try {
+    const models = await apiFetch('/api/copilot/models');
+    if (!Array.isArray(models)) return;
+    // Build a rich option label from a model entry
+    function modelLabel(m) {
+      const ctx = m.context_size ? ` · ${m.context_size}` : '';
+      const mult = m.multiplier !== undefined ? m.multiplier : 1;
+      return `${m.name}${ctx} · ${mult}x`;
+    }
+    const nonAutoModels = models.filter(m => m.id !== 'auto');
+    // Populate in-panel selects (Copilot Agent window + GenAI Agent tab)
+    ['#copilotModel', '#cpModel'].forEach(sel => {
+      const el = qs(sel);
+      if (!el) return;
+      const opts = ['<option value="">Auto (default)</option>'].concat(nonAutoModels.map(m =>
+        `<option value="${m.id}">${escapeHtml(modelLabel(m))}</option>`
+      ));
+      el.innerHTML = opts.join('');
+    });
+    // Populate inline LLM ATS model select
+    const atsModelSel = qs('#atsLlmModel');
+    if (atsModelSel) {
+      const opts = ['<option value="">Auto (default)</option>'].concat(nonAutoModels.map(m =>
+        `<option value="${m.id}">${escapeHtml(modelLabel(m))}</option>`
+      ));
+      atsModelSel.innerHTML = opts.join('');
+    }
+  } catch (err) {
+    console.warn('Could not load copilot models:', err.message || err);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const toggleButton = document.getElementById('toggleOutputButton');
+  const outputArea = document.getElementById('outputArea');
+
+  toggleButton.addEventListener('click', () => {
+    const isHidden = outputArea.style.display === 'none';
+    outputArea.style.display = isHidden ? 'block' : 'none';
+    toggleButton.textContent = isHidden ? 'Hide Output' : 'Show Output';
+  });
+});

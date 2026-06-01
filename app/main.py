@@ -1,20 +1,28 @@
 """
 Main FastAPI application — Resume + Job Tracker v2.0
 """
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from app.auth import register_user, login_user, validate_token, logout_user
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 import uuid
 import subprocess
 import re
+import tempfile
 
 from app import storage
 from app.job_scraper import scrape_job_description, parse_job_description_from_html
-from app.resume_parser import extract_resume_text, save_resume_as_pdf, save_resume_as_docx, convert_resume
+from app.resume_parser import (
+    ensure_compilable_latex_source,
+    extract_resume_text,
+    save_resume_as_pdf,
+    save_resume_as_docx,
+    convert_resume,
+)
 from app.resume_manager import (
     create_resume_entry, list_resumes, get_resume,
     update_resume_text, update_resume_tags, archive_resume,
@@ -28,6 +36,7 @@ from app.job_tracker import (
 from app.ats_checker import check_ats_compatibility
 from app.tailoring import tailor_resume, generate_cover_letter_with_meta
 from app.copilot_integration import gh_copilot_suggest_with_meta
+from app.copilot_integration import get_available_models
 
 BASE_DIR = Path(__file__).parent
 UPLOAD_DIR = BASE_DIR.parent / "uploads"
@@ -61,6 +70,14 @@ def _resume_file_path(resume: dict, kind: str = "current") -> str:
     if kind == "updated":
         return resume.get("updated_file_path") or resume.get("file_path") or ""
     return resume.get("updated_file_path") or resume.get("file_path") or ""
+
+
+def _resume_prompt_text(resume: dict) -> str:
+    if not resume:
+        return ""
+    if _is_latex_resume(resume):
+        return (resume.get("text") or "").strip()
+    return get_resume_semantic_text(resume)
 
 
 def _latex_install_hints(missing_files: list[str]) -> list[str]:
@@ -119,6 +136,31 @@ def _latex_failure_excerpt(log: str) -> str:
     return "\n".join(lines[-180:])
 
 
+def _extract_latex_errors(log: str) -> list[dict]:
+    """Extract structured LaTeX errors with best-effort line numbers."""
+    lines = [line.rstrip() for line in (log or "").splitlines()]
+    errors: list[dict] = []
+
+    for idx, line in enumerate(lines):
+        if not line.startswith("! "):
+            continue
+
+        message = line[2:].strip() or "LaTeX error"
+        line_no = None
+        context = ""
+
+        for look_ahead in lines[idx + 1: idx + 8]:
+            match = re.match(r"^l\.(\d+)\s?(.*)$", look_ahead.strip())
+            if match:
+                line_no = int(match.group(1))
+                context = (match.group(2) or "").strip()
+                break
+
+        errors.append({"line": line_no, "message": message, "context": context})
+
+    return errors
+
+
 def _create_tailored_resume_entry(
     *,
     source_resume: dict,
@@ -148,11 +190,65 @@ def _create_tailored_resume_entry(
     )
 
 
-# ─── ROOT ───────────────────────────────────────────────────────────────────
+# ─── ROOT & AUTH PAGES ─────────────────────────────────────────────────────
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
+    return RedirectResponse(url="/login", status_code=302)
+
+
+@app.get("/app", include_in_schema=False)
+async def app_page():
     return FileResponse(BASE_DIR / "static" / "index.html")
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page():
+    return FileResponse(BASE_DIR / "static" / "login.html")
+
+
+# ─── AUTH API ───────────────────────────────────────────────────────────────
+
+@app.post("/api/auth/register")
+async def api_register(data: dict = Body(...)):
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    email    = (data.get("email") or "").strip()
+    try:
+        user = register_user(username, password, email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "username": user["username"]}
+
+
+@app.post("/api/auth/login")
+async def api_login(data: dict = Body(...)):
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    token = login_user(username, password)
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return {"token": token, "username": username}
+
+
+@app.post("/api/auth/logout")
+async def api_logout(data: dict = Body(...)):
+    token = (data.get("token") or "").strip()
+    if token:
+        logout_user(token)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def api_auth_me(request: Request):
+    token = (
+        request.headers.get("X-Auth-Token")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    user = validate_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
 
 
 # ─── RESUMES ────────────────────────────────────────────────────────────────
@@ -321,6 +417,19 @@ async def api_compile_latex_pdf(resume_id: str, payload: dict = Body(default={})
     if not source.exists():
         raise HTTPException(status_code=404, detail="LaTeX source file not found on disk")
 
+    raw_source = source.read_text(encoding="utf-8")
+    normalized_source = ensure_compilable_latex_source(
+        raw_source,
+        Path(r.get("filename") or source.stem).stem,
+    )
+    if normalized_source != raw_source:
+        updated = update_resume_text(resume_id, normalized_source)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Resume not found")
+        r = updated
+        source_path = _resume_file_path(r, "updated") or _resume_file_path(r, "original")
+        source = Path(source_path)
+
     export_id = str(uuid.uuid4())
     stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     safe_name = Path(r.get("filename") or f"resume_{resume_id}").stem.replace(" ", "_")
@@ -390,6 +499,62 @@ async def api_compile_latex_pdf(resume_id: str, payload: dict = Body(default={})
     }
 
 
+@app.post("/api/resumes/{resume_id}/latex-errors")
+async def api_latex_errors(resume_id: str, payload: dict = Body(default={})):
+    r = get_resume(resume_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    if not _is_latex_resume(r):
+        return {"ok": True, "errors": []}
+
+    source_text = payload.get("source_text")
+    source_path = _resume_file_path(r, "updated") or _resume_file_path(r, "original")
+    if not source_path:
+        return {"ok": False, "errors": [{"line": None, "message": "LaTeX source file is missing", "context": ""}]}
+
+    source = Path(source_path)
+    if isinstance(source_text, str):
+        raw_source = source_text
+    else:
+        if not source.exists():
+            return {"ok": False, "errors": [{"line": None, "message": "LaTeX source file not found on disk", "context": ""}]}
+        raw_source = source.read_text(encoding="utf-8")
+
+    normalized_source = ensure_compilable_latex_source(
+        raw_source,
+        Path(r.get("filename") or source.stem).stem,
+    )
+
+    tex_name = Path(r.get("filename") or source.name or "main.tex").name
+    if not tex_name.lower().endswith(".tex"):
+        tex_name = f"{Path(tex_name).stem}.tex"
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            tex_path = tmp_path / tex_name
+            tex_path.write_text(normalized_source, encoding="utf-8")
+
+            cmd = [
+                "pdflatex",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                f"-output-directory={tmp_path}",
+                str(tex_path),
+            ]
+            run = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail="pdflatex is not installed. Install a LaTeX distribution first.")
+
+    log = ((run.stdout or "") + "\n" + (run.stderr or "")).strip()
+    errors = _extract_latex_errors(log)
+    return {
+        "ok": run.returncode == 0 and not errors,
+        "errors": errors,
+        "excerpt": _latex_failure_excerpt(log) if errors else "",
+    }
+
+
 @app.get("/api/resumes/{resume_id}/file")
 async def api_download_resume_file(resume_id: str, kind: str = "current"):
     r = get_resume(resume_id)
@@ -399,6 +564,41 @@ async def api_download_resume_file(resume_id: str, kind: str = "current"):
     if not file_path or not Path(file_path).exists():
         raise HTTPException(status_code=404, detail="Requested resume file not found")
     return FileResponse(file_path, filename=Path(file_path).name)
+
+
+@app.get("/api/resumes/{resume_id}/preview-pdf")
+async def api_preview_pdf(resume_id: str):
+    """Serve a dynamic PDF preview for any resume (LaTeX, DOCX, or PDF)."""
+    r = get_resume(resume_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    file_path = _resume_file_path(r, "current")
+    if not file_path or not Path(file_path).exists():
+        file_path = _resume_file_path(r, "original")
+
+    if not file_path or not Path(file_path).exists():
+        raise HTTPException(status_code=404, detail="Resume file missing")
+
+    path_obj = Path(file_path)
+    ext = path_obj.suffix.lower()
+
+    if ext == ".pdf":
+        return FileResponse(file_path, media_type="application/pdf")
+
+    if ext == ".tex":
+        # Look for the last successfully compiled application file
+        files = storage.get_all_application_files()
+        latest = next((f for f in files if f.get("resume_id") == resume_id and (f.get("format") or "").lower() == "pdf"), None)
+        if latest and Path(latest["file_path"]).exists():
+            return FileResponse(latest["file_path"], media_type="application/pdf")
+        # Try to compile if it's LaTeX? For simplicity here, just return 400 if not compiled
+        raise HTTPException(status_code=400, detail="Please compile the LaTeX resume to view its PDF preview.")
+
+    # Fallback: create PDF from plain text (for .txt, .docx, etc. if needed)
+    preview_path = UPLOAD_DIR / f"preview_{resume_id}.pdf"
+    save_resume_as_pdf(r.get("text") or "No content available", str(preview_path))
+    return FileResponse(preview_path, media_type="application/pdf")
 
 
 @app.get("/api/application-files")
@@ -549,7 +749,9 @@ JOB POSTING:
 
 JSON:"""
 
-    cli_meta = gh_copilot_suggest_with_meta(prompt)
+    # Allow caller to request a specific Copilot model (e.g. to choose a cheaper model)
+    model = (payload.get("model") or "").strip()
+    cli_meta = gh_copilot_suggest_with_meta(prompt, model=model)
     raw = (cli_meta.get("stdout") or "").strip()
 
     # Parse JSON — strip markdown fences only if present, otherwise use raw directly
@@ -621,6 +823,7 @@ JSON:"""
             "returncode": cli_meta.get("returncode", -1),
             "success": cli_meta.get("success", False),
             "model": cli_meta.get("model", "auto"),
+            "model_info": cli_meta.get("model_info", {}),
             "tool": "copilot",
             "task": "copilot_fill_job",
         },
@@ -655,6 +858,87 @@ async def api_ats_check(payload: dict = Body(...)):
     )
 
 
+@app.post("/api/ats/check-llm")
+async def api_ats_check_llm(payload: dict = Body(...)):
+    import json as _json
+    resume_text = (payload.get("resume_text") or "").strip()
+    job_description = (payload.get("job_description") or "").strip()
+    model = (payload.get("model") or "").strip()
+
+    prompt = (
+        "You are an expert ATS resume analyzer. Return ONLY a valid JSON object — no markdown, "
+        "no explanation, no code fences.\n\n"
+        "Schema:\n"
+        "{\n"
+        '  "parsed_resume": {"name":"","contact":{},"sections":[],"skills":[],"work_experience":[]},\n'
+        '  "job_description_analysis": {"required_skills":[],"preferred_skills":[],"key_responsibilities":[]},\n'
+        '  "ats_score": {"score_percent":0,"breakdown":{"sections":0,"keywords":0,"formatting":0,"impact":0},"label":""},\n'
+        '  "gap_analysis": {"missing_keywords":[],"weak_sections":[],"issues":[{"type":"","severity":"","message":"","proof":""}]},\n'
+        '  "recommendations": {"priority":[],"quick_wins":[],"rewrites":[]}\n'
+        "}\n\n"
+        "Rules:\n"
+        "- For every issue include a 'proof' field: a short verbatim excerpt from the resume, or the exact keyword/section name that is absent.\n"
+        "- severity values: critical | high | medium | low\n"
+        "- score_percent: 0-100 integer\n"
+        "- Return nothing outside the JSON object.\n\n"
+        f"RESUME:\n{resume_text[:20000]}\n\n"
+        f"JOB DESCRIPTION:\n{job_description[:20000]}"
+    )
+
+    cli_meta = gh_copilot_suggest_with_meta(prompt, model=model)
+    stdout = (cli_meta.get("stdout") or "").strip()
+
+    if cli_meta.get("success") and stdout:
+        # Strip accidental markdown code fences the LLM may add
+        import re as _re2
+        clean = _re2.sub(r"^```(?:json)?\s*|\s*```$", "", stdout, flags=_re2.DOTALL).strip()
+        try:
+            parsed = _json.loads(clean)
+            score_data = parsed.get("ats_score", {})
+            ats_score = int(score_data.get("score_percent", 0))
+            gap = parsed.get("gap_analysis", {})
+            issues = gap.get("issues", [])
+            return {
+                "ats_score": ats_score,
+                "score": ats_score,
+                "score_breakdown": score_data.get("breakdown", {}),
+                "issues": issues,
+                "keyword_analysis": {
+                    "matched_keywords": [],
+                    "missing_keywords": gap.get("missing_keywords", []),
+                },
+                "recommendations": parsed.get("recommendations", {}),
+                "parsed_resume": parsed.get("parsed_resume", {}),
+                "job_description_analysis": parsed.get("job_description_analysis", {}),
+                "llm": True,
+                "cli_status": {
+                    "success": True,
+                    "model": cli_meta.get("model", "auto"),
+                    "model_info": cli_meta.get("model_info", {}),
+                },
+            }
+        except Exception:
+            fallback = check_ats_compatibility(resume_text, job_description)
+            fallback["llm"] = False
+            fallback["cli_status"] = {
+                "success": False,
+                "error": "invalid_llm_json",
+                "raw_output": stdout[:2000],
+                "model": cli_meta.get("model", "auto"),
+            }
+            return fallback
+
+    # Copilot unavailable — deterministic fallback
+    fallback = check_ats_compatibility(resume_text, job_description)
+    fallback["llm"] = False
+    fallback["cli_status"] = {
+        "success": False,
+        "error": cli_meta.get("stderr", "Copilot unavailable"),
+        "model": cli_meta.get("model", "auto"),
+    }
+    return fallback
+
+
 # ─── TAILORING ──────────────────────────────────────────────────────────────
 
 @app.post("/api/tailor")
@@ -663,10 +947,11 @@ async def api_tailor(payload: dict = Body(...)):
     job_id = payload.get("job_id")
     resume = get_resume(resume_id) if resume_id else None
     job = get_job(job_id) if job_id else None
-    resume_text = get_resume_semantic_text(resume) or payload.get("resume_text", "")
+    resume_text = _resume_prompt_text(resume) or payload.get("resume_text", "")
     job_description = (job or {}).get("description") or payload.get("job_description", "")
     sections = (job or {}).get("sections", {})
-    return tailor_resume(resume_text, job_description, sections, None)
+    model = (payload.get("model") or "").strip()
+    return tailor_resume(resume_text, job_description, sections, None, model=model)
 
 
 @app.post("/api/cover-letter")
@@ -682,12 +967,14 @@ async def api_cover_letter(payload: dict = Body(...)):
     my_info = (job or {}).get("my_info") or payload.get("my_info", "")
     if my_info:
         job_description = f"{job_description}\n\nAdditional context:\n{my_info}"
+    model = (payload.get("model") or "").strip()
     result = generate_cover_letter_with_meta(
         resume_text=resume_text,
         job_description=job_description,
         company_name=company,
         job_title=job_title,
         candidate_name="",
+        model=model,
     )
     if job_id and resume_id:
         update_job(job_id, {"resume_id": resume_id, "cover_letter": result.get("cover_letter", "")})
@@ -724,7 +1011,8 @@ ADDITIONAL CONTEXT:
 {my_info[:1500]}
 """
 
-    cli_meta = gh_copilot_suggest_with_meta(prompt)
+    model = (payload.get("model") or "").strip()
+    cli_meta = gh_copilot_suggest_with_meta(prompt, model=model)
     recommendations = cli_meta.get("stdout", "") if cli_meta.get("success") else ""
     if recommendations:
         updatable = {"resume_recommendations": recommendations}
@@ -761,7 +1049,7 @@ async def api_apply_job_recommendations(job_id: str, payload: dict = Body(defaul
     if not source_resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    resume_text = get_resume_semantic_text(source_resume)
+    resume_text = _resume_prompt_text(source_resume)
     if not resume_text:
         raise HTTPException(status_code=400, detail="Resume content is required")
 
@@ -844,6 +1132,12 @@ async def api_copilot_prompt(payload: dict = Body(...)):
             "task": "prompt_window",
         },
     }
+
+
+@app.get("/api/copilot/models")
+async def api_copilot_models():
+    """Return available Copilot models and their metadata for the UI."""
+    return get_available_models()
 
 
 # ─── SETTINGS ───────────────────────────────────────────────────────────────

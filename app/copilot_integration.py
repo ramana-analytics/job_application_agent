@@ -1,5 +1,44 @@
 import subprocess
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+
+# Simple catalog of supported models for the UI and metadata.
+# Each entry provides: id (CLI model string), display name, level, and a price multiplier.
+MODEL_CATALOG: List[Dict] = [
+    {"id": "auto", "name": "Auto", "context_size": "", "capabilities": [], "multiplier": 1.0},
+    {"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5", "context_size": "160K", "capabilities": ["Tools", "Vision"], "multiplier": 0.33},
+    {"id": "claude-sonnet-4.5", "name": "Claude Sonnet 4.5", "context_size": "160K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "claude-sonnet-4.6", "name": "Claude Sonnet 4.6", "context_size": "160K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "context_size": "173K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "gemini-3-flash-preview", "name": "Gemini 3 Flash (Preview)", "context_size": "173K", "capabilities": ["Tools", "Vision"], "multiplier": 0.33},
+    {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro (Preview)", "context_size": "173K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash", "context_size": "192K", "capabilities": ["Tools", "Vision"], "multiplier": 14.0},
+    {"id": "gpt-4.1", "name": "GPT-4.1", "context_size": "128K", "capabilities": ["Tools", "Vision"], "multiplier": 0.0},
+    {"id": "gpt-5-mini", "name": "GPT-5 mini", "context_size": "192K", "capabilities": ["Tools", "Vision"], "multiplier": 0.0},
+    {"id": "gpt-5.2", "name": "GPT-5.2", "context_size": "192K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "gpt-5.2-codex", "name": "GPT-5.2 Codex", "context_size": "400K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "gpt-5.3-codex", "name": "GPT-5.3 Codex", "context_size": "400K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "gpt-5.4", "name": "GPT-5.4", "context_size": "400K", "capabilities": ["Tools", "Vision"], "multiplier": 1.0},
+    {"id": "gpt-5.4-mini", "name": "GPT-5.4 mini", "context_size": "400K", "capabilities": ["Tools", "Vision"], "multiplier": 0.33},
+    {"id": "raptor-mini-preview", "name": "Raptor mini (Preview)", "context_size": "264K", "capabilities": ["Tools", "Vision"], "multiplier": 0.0},
+]
+
+
+
+
+
+def get_available_models() -> List[Dict]:
+    """Return the model catalog (UI-friendly)."""
+    return MODEL_CATALOG
+
+
+def _find_model_info(model_id: str) -> Optional[Dict]:
+    if not model_id:
+        return None
+    for m in MODEL_CATALOG:
+        if m.get("id") == model_id:
+            return m
+    return None
+
 
 COPILOT_CMD_BASE = ["copilot", "-p", "<PROMPT>", "--allow-all-tools", "-s"]
 
@@ -7,6 +46,7 @@ COPILOT_CMD_BASE = ["copilot", "-p", "<PROMPT>", "--allow-all-tools", "-s"]
 def gh_copilot_suggest_with_meta(prompt: str, max_retries: int = 2, model: str = "") -> Dict:
     """
     Execute Copilot CLI and return command metadata + output.
+    Adds `model_info` to the returned metadata when available.
     """
     last_error = ""
     model = (model or "").strip()
@@ -33,6 +73,8 @@ def gh_copilot_suggest_with_meta(prompt: str, max_retries: int = 2, model: str =
             if model:
                 command_display += f" --model {model}"
 
+            model_info = _find_model_info(model) or {"id": model or "auto", "name": model or "auto", "level": "", "multiplier": 1.0}
+
             meta = {
                 "command": command_display,
                 "returncode": result.returncode,
@@ -41,6 +83,7 @@ def gh_copilot_suggest_with_meta(prompt: str, max_retries: int = 2, model: str =
                 "attempt": attempt + 1,
                 "success": success,
                 "model": model or "auto",
+                "model_info": model_info,
             }
             if success:
                 return meta
@@ -68,6 +111,7 @@ def gh_copilot_suggest_with_meta(prompt: str, max_retries: int = 2, model: str =
         "attempt": max_retries,
         "success": False,
         "model": model or "auto",
+        "model_info": _find_model_info(model) or {"id": model or "auto", "name": model or "auto", "level": "", "multiplier": 1.0},
     }
 
 
@@ -84,7 +128,7 @@ def gh_copilot_suggest(prompt: str, max_retries: int = 2) -> Optional[str]:
 
 def generate_resume_suggestions(job_description: str, current_resume: str) -> Optional[str]:
     """
-    Generate resume improvement suggestions based on job description.
+    Generate resume improvement suggestions based on job description and resume.
     
     Args:
         job_description: The job posting text

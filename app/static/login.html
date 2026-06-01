@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job Application Agent — Sign In</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;overflow:hidden}
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      font-size:14px;
+      background:#030712;
+      color:#e8edf8;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      min-height:100vh;
+    }
+
+    /* ── Animated background ── */
+    .bg{position:fixed;inset:0;overflow:hidden;z-index:0;pointer-events:none}
+    .orb{
+      position:absolute;border-radius:50%;
+      filter:blur(90px);opacity:.28;
+      animation:drift 14s ease-in-out infinite alternate;
+    }
+    .orb1{width:700px;height:700px;background:radial-gradient(circle,#4f46e5,transparent 70%);top:-250px;left:-150px;animation-duration:16s}
+    .orb2{width:550px;height:550px;background:radial-gradient(circle,#7c3aed,transparent 70%);bottom:-180px;right:-120px;animation-duration:12s;animation-delay:-6s}
+    .orb3{width:400px;height:400px;background:radial-gradient(circle,#0ea5e9,transparent 70%);top:45%;left:58%;animation-duration:18s;animation-delay:-10s}
+    @keyframes drift{
+      from{transform:translate(0,0) scale(1)}
+      to{transform:translate(50px,35px) scale(1.07)}
+    }
+    .bg-grid{
+      position:fixed;inset:0;pointer-events:none;z-index:1;
+      background-image:
+        linear-gradient(rgba(99,102,241,0.05) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(99,102,241,0.05) 1px,transparent 1px);
+      background-size:44px 44px;
+    }
+
+    /* ── Card ── */
+    .card{
+      position:relative;z-index:10;
+      width:420px;max-width:calc(100vw - 28px);
+      background:rgba(14,20,34,0.88);
+      border:1px solid rgba(99,102,241,0.22);
+      border-radius:20px;
+      padding:38px 38px 30px;
+      backdrop-filter:blur(28px);
+      -webkit-backdrop-filter:blur(28px);
+      box-shadow:
+        0 40px 90px rgba(0,0,0,0.75),
+        0 0 0 1px rgba(99,102,241,0.1),
+        inset 0 1px 0 rgba(255,255,255,0.07);
+      animation:cardIn .4s cubic-bezier(0.34,1.56,0.64,1) both;
+    }
+    @keyframes cardIn{
+      from{opacity:0;transform:translateY(24px) scale(.97)}
+      to{opacity:1;transform:translateY(0) scale(1)}
+    }
+
+    /* ── Logo ── */
+    .logo{text-align:center;margin-bottom:30px}
+    .logo-icon{
+      display:inline-flex;align-items:center;justify-content:center;
+      width:56px;height:56px;border-radius:16px;margin-bottom:12px;
+      background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);
+      font-size:26px;
+      box-shadow:0 8px 24px rgba(99,102,241,0.4);
+    }
+    .logo-text{
+      display:block;font-size:24px;font-weight:800;letter-spacing:-.5px;
+      background:linear-gradient(135deg,#818cf8 0%,#a78bfa 50%,#34d399 100%);
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+    }
+    .logo-sub{display:block;font-size:11px;color:#3a4560;font-weight:500;margin-top:4px;letter-spacing:.3px}
+
+    /* ── Tabs ── */
+    .auth-tabs{
+      display:flex;background:rgba(6,10,18,0.7);
+      border-radius:11px;padding:3px;margin-bottom:24px;
+      border:1px solid rgba(30,42,69,0.9);gap:2px;
+    }
+    .auth-tab{
+      flex:1;padding:8px 12px;border:none;border-radius:9px;
+      cursor:pointer;font-size:13px;font-weight:500;
+      background:transparent;color:#3a4560;
+      transition:all .2s;font-family:inherit;
+    }
+    .auth-tab:hover:not(.active){color:#8a96b8;background:rgba(30,42,69,0.5)}
+    .auth-tab.active{
+      background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+      color:#fff;box-shadow:0 2px 10px rgba(99,102,241,0.45);
+    }
+
+    /* ── Forms ── */
+    .auth-form{display:none}
+    .auth-form.active{display:flex;flex-direction:column;gap:15px}
+
+    .field{display:flex;flex-direction:column;gap:6px}
+    .field label{font-size:11.5px;color:#6a7898;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+    .field input{
+      background:rgba(6,10,18,0.8);
+      border:1px solid rgba(30,42,69,0.9);
+      border-radius:10px;color:#e8edf8;
+      font-size:13.5px;padding:11px 14px;
+      outline:none;transition:border-color .15s,box-shadow .15s;
+      font-family:inherit;
+    }
+    .field input:focus{
+      border-color:#6366f1;
+      box-shadow:0 0 0 3px rgba(99,102,241,0.18);
+    }
+    .field input::placeholder{color:#252e45}
+
+    /* ── Submit ── */
+    .btn-submit{
+      margin-top:4px;padding:12px;border:none;border-radius:11px;
+      background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 50%,#6366f1 100%);
+      background-size:200% 100%;
+      color:#fff;font-size:14px;font-weight:600;
+      cursor:pointer;letter-spacing:.02em;
+      transition:filter .15s,transform .12s,box-shadow .15s;
+      box-shadow:0 4px 18px rgba(99,102,241,0.45);
+      font-family:inherit;
+      animation:btn-shift 4s linear infinite;
+    }
+    @keyframes btn-shift{
+      0%{background-position:0% 50%}
+      50%{background-position:100% 50%}
+      100%{background-position:0% 50%}
+    }
+    .btn-submit:hover:not(:disabled){
+      filter:brightness(1.1);transform:translateY(-1px);
+      box-shadow:0 6px 24px rgba(99,102,241,0.55);
+    }
+    .btn-submit:active:not(:disabled){transform:translateY(0)}
+    .btn-submit:disabled{opacity:.55;cursor:not-allowed;transform:none;animation:none}
+
+    /* ── Messages ── */
+    .msg{
+      padding:10px 14px;border-radius:9px;
+      font-size:12.5px;font-weight:500;display:none;
+    }
+    .msg.error{background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.3);color:#f87171}
+    .msg.success{background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.3);color:#34d399}
+    .msg.show{display:block}
+
+    /* ── Feature pills ── */
+    .auth-features{
+      display:flex;justify-content:center;gap:8px;
+      margin-top:24px;flex-wrap:wrap;
+    }
+    .feat{
+      display:inline-flex;align-items:center;gap:4px;
+      font-size:10px;color:#2a3550;letter-spacing:.2px;
+      padding:3px 9px;border-radius:20px;
+      border:1px solid rgba(30,42,69,0.6);
+      transition:border-color .15s,color .15s;
+    }
+    .feat:hover{border-color:rgba(99,102,241,0.3);color:#4a5570}
+    .feat-icon{font-size:11px}
+
+    /* ── Spinner ── */
+    .spinner{
+      width:14px;height:14px;
+      border:2px solid rgba(255,255,255,.3);
+      border-top-color:#fff;border-radius:50%;
+      animation:spin .6s linear infinite;
+      display:inline-block;vertical-align:middle;margin-right:6px;
+    }
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ── Divider ── */
+    .or-divider{
+      display:flex;align-items:center;gap:10px;
+      font-size:11px;color:#1e2840;margin:2px 0;
+    }
+    .or-divider::before,.or-divider::after{
+      content:"";flex:1;height:1px;background:rgba(30,42,69,0.7);
+    }
+
+    /* ── Version ── */
+    .version{text-align:center;margin-top:16px;font-size:10px;color:#1a2236}
+  </style>
+</head>
+<body>
+  <div class="bg">
+    <div class="orb orb1"></div>
+    <div class="orb orb2"></div>
+    <div class="orb orb3"></div>
+  </div>
+  <div class="bg-grid"></div>
+
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon">🧑‍💻</div>
+      <span class="logo-text">Job Application Agent</span>
+      <span class="logo-sub">powered by GitHub Copilot</span>
+    </div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tabSignin" onclick="switchTab('signin')">Sign In</button>
+      <button class="auth-tab" id="tabRegister" onclick="switchTab('register')">Create Account</button>
+    </div>
+
+    <!-- ── Sign In Form ── -->
+    <div id="msgSignin" class="msg error"></div>
+    <form id="formSignin" class="auth-form active" onsubmit="doSignin(event)">
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="siUsername" placeholder="your username"
+               autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="siPassword" placeholder="••••••••"
+               autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn-submit" id="btnSignin">Sign In</button>
+    </form>
+
+    <!-- ── Register Form ── -->
+    <div id="msgRegister" class="msg error"></div>
+    <form id="formRegister" class="auth-form" onsubmit="doRegister(event)">
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="regUsername" placeholder="choose a username"
+               autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label>Email <span style="color:#1e2840;font-weight:400;text-transform:none">(optional)</span></label>
+        <input type="email" id="regEmail" placeholder="you@example.com"
+               autocomplete="email">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="regPassword" placeholder="min 6 characters"
+               autocomplete="new-password" required>
+      </div>
+      <div class="field">
+        <label>Confirm Password</label>
+        <input type="password" id="regConfirm" placeholder="repeat password"
+               autocomplete="new-password" required>
+      </div>
+      <button type="submit" class="btn-submit" id="btnRegister">Create Account</button>
+    </form>
+
+    <div class="auth-features">
+      <span class="feat"><span class="feat-icon">🤖</span> GitHub Copilot</span>
+      <span class="feat"><span class="feat-icon">✨</span> GenAI Powered</span>
+      <span class="feat"><span class="feat-icon">🧑‍💻</span> Agentic Tracker</span>
+      <span class="feat"><span class="feat-icon">🧠</span> LLM Resume</span>
+    </div>
+    <div class="version">Job Application Agent v1.0 · AI-Powered Resume Builder</div>
+  </div>
+
+  <script>
+    // ── Tab switching ──────────────────────────────────────────────────
+    function switchTab(tab) {
+      ['Signin','Register'].forEach(t => {
+        const active = t.toLowerCase() === tab;
+        document.getElementById('tab' + t).classList.toggle('active', active);
+        document.getElementById('form' + t).classList.toggle('active', active);
+        hideMsg('msg' + t);
+      });
+    }
+
+    // ── Message helpers ───────────────────────────────────────────────
+    function showMsg(id, text, type = 'error') {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = 'msg ' + type + ' show';
+    }
+    function hideMsg(id) {
+      const el = document.getElementById(id);
+      if (el) el.className = 'msg error';
+    }
+
+    // ── Sign In ───────────────────────────────────────────────────────
+    async function doSignin(e) {
+      e.preventDefault();
+      hideMsg('msgSignin');
+      const btn = document.getElementById('btnSignin');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Signing in…';
+      const username = document.getElementById('siUsername').value.trim();
+      const password = document.getElementById('siPassword').value;
+      try {
+        const r = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          showMsg('msgSignin', data.error || data.detail || 'Invalid username or password');
+          return;
+        }
+        localStorage.setItem('rops_token', data.token);
+        localStorage.setItem('rops_username', data.username);
+        window.location.href = '/app';
+      } catch {
+        showMsg('msgSignin', 'Connection error — is the server running?');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Sign In';
+      }
+    }
+
+    // ── Register ──────────────────────────────────────────────────────
+    async function doRegister(e) {
+      e.preventDefault();
+      hideMsg('msgRegister');
+      const password = document.getElementById('regPassword').value;
+      const confirm  = document.getElementById('regConfirm').value;
+      if (password !== confirm) { showMsg('msgRegister', 'Passwords do not match'); return; }
+      const btn = document.getElementById('btnRegister');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Creating account…';
+      const username = document.getElementById('regUsername').value.trim();
+      const email    = document.getElementById('regEmail').value.trim();
+      try {
+        const r = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, email, password }),
+        });
+        const data = await r.json();
+        if (!r.ok) { showMsg('msgRegister', data.error || data.detail || 'Registration failed'); return; }
+        showMsg('msgRegister', '✓ Account created! Signing you in…', 'success');
+        // Auto sign-in after registration
+        setTimeout(async () => {
+          const r2 = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          });
+          if (r2.ok) {
+            const d2 = await r2.json();
+            localStorage.setItem('rops_token', d2.token);
+            localStorage.setItem('rops_username', d2.username);
+            window.location.href = '/app';
+          }
+        }, 900);
+      } catch {
+        showMsg('msgRegister', 'Connection error — is the server running?');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Create Account';
+      }
+    }
+
+    // ── Already logged in? Redirect to app ───────────────────────────
+    const _token = localStorage.getItem('rops_token');
+    if (_token) {
+      fetch('/api/auth/me', { headers: { 'X-Auth-Token': _token } })
+        .then(r => { if (r.ok) window.location.href = '/app'; })
+        .catch(() => {});
+    }
+  </script>
+</body>
+</html>

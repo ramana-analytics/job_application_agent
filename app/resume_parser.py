@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -55,6 +56,136 @@ def extract_text_from_latex(file_path: str) -> str:
         return Path(file_path).read_text(encoding="utf-8")
     except Exception as e:
         raise ValueError(f"Error reading LaTeX: {str(e)}")
+
+
+def strip_latex_code_fences(source_text: str) -> str:
+    """Remove a single outer Markdown code fence from generated LaTeX."""
+    text = (source_text or "").strip()
+    match = re.fullmatch(r"```(?:latex|tex)?\s*(.*?)\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    return (match.group(1) if match else text).strip()
+
+
+def _latex_escape(text: str) -> str:
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    normalized = (
+        text.replace("\u00a0", " ")
+        .replace("\u2022", "*")
+        .replace("\u2014", " -- ")
+        .replace("\u2013", " - ")
+        .replace("\u2019", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+    )
+    return "".join(replacements.get(ch, ch) for ch in normalized)
+
+
+def plain_text_to_latex_source(text: str, document_title: str = "Resume") -> str:
+    """Convert plain resume text into a minimal compilable LaTeX document."""
+    lines = [line.rstrip() for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    body: list[str] = []
+    in_items = False
+
+    def close_items() -> None:
+        nonlocal in_items
+        if in_items:
+            body.append(r"\end{itemize}")
+            body.append("")
+            in_items = False
+
+    for idx, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not line:
+            close_items()
+            if body and body[-1] != "":
+                body.append("")
+            continue
+
+        is_bullet = line.startswith(("- ", "* ", "• "))
+        if is_bullet:
+            if not in_items:
+                body.append(r"\begin{itemize}")
+                in_items = True
+            body.append(rf"\item {_latex_escape(line[2:].strip())}")
+            continue
+
+        close_items()
+        escaped = _latex_escape(line)
+        is_heading = idx > 0 and line == line.upper() and 1 <= len(line.split()) <= 8
+        if idx == 0:
+            body.append(rf"{{\LARGE\bfseries {escaped}}}\par")
+        elif idx == 1:
+            body.append(rf"{escaped}\par")
+        elif is_heading:
+            body.append(rf"\section*{{{escaped}}}")
+        else:
+            body.append(rf"{escaped}\par")
+
+    close_items()
+
+    while body and body[-1] == "":
+        body.pop()
+
+    title = _latex_escape(document_title or "Resume")
+    content = "\n".join(body) if body else rf"{title}\par"
+    return "\n".join(
+        [
+            r"\documentclass[11pt]{article}",
+            rf"\title{{{title}}}",
+            r"\pagestyle{empty}",
+            r"\setlength{\parindent}{0pt}",
+            r"\begin{document}",
+            content,
+            r"\end{document}",
+            "",
+        ]
+    )
+
+
+def ensure_compilable_latex_source(source_text: str, document_title: str = "Resume") -> str:
+    """Normalize Copilot/user LaTeX content into a complete compilable document."""
+    cleaned = strip_latex_code_fences(source_text)
+    if not cleaned:
+        return plain_text_to_latex_source("", document_title)
+
+    has_documentclass = bool(re.search(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}", cleaned))
+    has_begin = r"\begin{document}" in cleaned
+    has_end = r"\end{document}" in cleaned
+    has_command = bool(re.search(r"\\[a-zA-Z@]+", cleaned))
+
+    if has_documentclass and has_begin and has_end:
+        return cleaned.rstrip() + "\n"
+
+    if has_command:
+        body = re.sub(r"\\documentclass(?:\[[^\]]*\])?\{[^}]+\}", "", cleaned).strip()
+        if r"\begin{document}" in body:
+            body = body.split(r"\begin{document}", 1)[1]
+        if r"\end{document}" in body:
+            body = body.split(r"\end{document}", 1)[0]
+        body = body.strip()
+        return "\n".join(
+            [
+                r"\documentclass[11pt]{article}",
+                r"\pagestyle{empty}",
+                r"\setlength{\parindent}{0pt}",
+                r"\begin{document}",
+                body,
+                r"\end{document}",
+                "",
+            ]
+        )
+
+    return plain_text_to_latex_source(cleaned, document_title)
 
 
 def latex_source_to_plain_text(source_text: str) -> str:
